@@ -43,12 +43,12 @@ def get_data():
 init_db()
 
 # ==========================================
-# [AI PT LOGIC - FIXED]
+# [AI PT LOGIC - STABLE FIX]
 # ==========================================
 def run_mental_gym(api_key, history):
     if not api_key: return None, "🚫 API Key가 없습니다. 사이드바를 확인하세요."
     
-    # 1. 시스템 프롬프트 (별도 분리)
+    # 1. 시스템 프롬프트
     system_instruction = {
         "parts": [{ "text": """
             당신은 'FeynmanTic Gym'의 악독한 AI 트레이너입니다.
@@ -71,9 +71,9 @@ def run_mental_gym(api_key, history):
         """}]
     }
     
-    # 2. 대화 내역 구성 (Google API 형식 준수)
+    # 2. 대화 내역 구성
     contents = []
-    for msg in history[-5:]: # 최근 5턴
+    for msg in history[-5:]: 
         role = "user" if msg['role'] == "user" else "model"
         contents.append({
             "role": role,
@@ -86,48 +86,39 @@ def run_mental_gym(api_key, history):
         "contents": contents
     }
     
-    models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.0-pro"]
+    # [FIX] 가장 안정적인 최신 모델 1개만 사용 (404 에러 방지)
+    model = "gemini-1.5-flash" 
     headers = {'Content-Type': 'application/json'}
     
-    last_error_msg = ""
-
-    for model in models:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            req = urllib.request.Request(url, data=json.dumps(request_data).encode('utf-8'), headers=headers)
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        req = urllib.request.Request(url, data=json.dumps(request_data).encode('utf-8'), headers=headers)
+        
+        with urllib.request.urlopen(req) as res:
+            response = json.loads(res.read().decode('utf-8'))
             
-            with urllib.request.urlopen(req) as res:
-                response = json.loads(res.read().decode('utf-8'))
+            if 'candidates' in response and response['candidates']:
+                text = response['candidates'][0]['content']['parts'][0]['text']
                 
-                # 응답 안전하게 파싱
-                if 'candidates' in response and response['candidates']:
-                    text = response['candidates'][0]['content']['parts'][0]['text']
-                    
-                    # JSON(합격)인지 확인
-                    if "{" in text and "passed" in text:
-                        try:
-                            clean_json = text[text.find('{'):text.rfind('}')+1]
-                            return json.loads(clean_json), None
-                        except:
-                            return {"status": "coaching", "text": text}, None
-                    else:
+                # JSON(합격)인지 확인
+                if "{" in text and "passed" in text:
+                    try:
+                        clean_json = text[text.find('{'):text.rfind('}')+1]
+                        return json.loads(clean_json), None
+                    except:
                         return {"status": "coaching", "text": text}, None
                 else:
-                    last_error_msg = "AI 응답이 비어있습니다."
-                    continue
+                    return {"status": "coaching", "text": text}, None
+            else:
+                return None, "AI가 빈 응답을 보냈습니다."
 
-        except urllib.error.HTTPError as e:
-            # 에러 코드를 명확히 표시
-            if e.code == 400: last_error_msg = f"400 Bad Request (요청 형식 오류 - 개발자 수정 필요)"
-            elif e.code == 401: last_error_msg = f"401 Unauthorized (API Key가 틀렸습니다)"
-            elif e.code == 404: last_error_msg = f"404 Not Found (모델명 {model} 오류)"
-            else: last_error_msg = f"HTTP Error {e.code}"
-            continue
-        except Exception as e:
-            last_error_msg = f"System Error: {str(e)}"
-            continue
-            
-    return None, f"PT 선생님 연결 실패: {last_error_msg}"
+    except urllib.error.HTTPError as e:
+        if e.code == 400: return None, f"400 Bad Request: 요청 형식이 잘못되었습니다."
+        elif e.code == 401: return None, f"401 Unauthorized: API Key가 틀렸습니다."
+        elif e.code == 404: return None, f"404 Not Found: 모델({model})을 찾을 수 없습니다."
+        else: return None, f"HTTP Error {e.code}: {e.reason}"
+    except Exception as e:
+        return None, f"System Error: {str(e)}"
 
 # ==========================================
 # [UI] GYM INTERFACE
@@ -139,8 +130,6 @@ with st.sidebar:
     st.title("🏋️ FeynmanTic Gym")
     st.caption("No Pain, No Brain.")
     google_api_key = st.text_input("Gym Pass (API Key)", type="password")
-    if not google_api_key:
-        st.warning("👈 키를 입력해야 PT를 받을 수 있습니다.")
     
     st.markdown("---")
     if st.button("🧹 라커룸 청소 (대화 초기화)"):
