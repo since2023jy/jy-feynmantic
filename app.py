@@ -3,10 +3,9 @@ import sqlite3
 import datetime
 import time
 import pandas as pd
-import graphviz # 그래프 시각화 라이브러리 (Streamlit 내장)
 
 # ==========================================
-# [DATABASE]
+# [DATABASE] 뇌관 (Logic Core)
 # ==========================================
 def init_db():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
@@ -92,8 +91,8 @@ with st.sidebar:
     st.markdown("---")
     st.info("Input -> Process -> Network")
 
-st.title("🧠 FeynmanTic OS v1.8")
-st.caption("Feature: Knowledge Graph Visualization (Palantir View)")
+st.title("🧠 FeynmanTic OS v1.9")
+st.caption("No-Install Edition: Knowledge Graph Active")
 
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -108,36 +107,43 @@ with col2:
 st.markdown("---")
 
 # ==========================================
-# [VISUALIZATION] 팔란티어 스타일 지식 그래프
+# [VISUALIZATION] Native Graph (DOT String)
 # ==========================================
 if not df.empty:
     with st.expander("🕸 지식 네트워크 지도 (Knowledge Graph)", expanded=True):
-        # Graphviz 객체 생성
-        graph = graphviz.Digraph()
-        graph.attr(rankdir='LR', bgcolor='transparent')
-        graph.attr('node', shape='box', style='filled', fillcolor='#f0f2f6', fontname='Helvetica')
-        graph.attr('edge', color='#bdc3c7')
-
-        # 데이터 순회하며 노드와 엣지 생성
+        
+        # 1. DOT 언어로 그래프 정의 시작
+        dot_source = """
+        digraph {
+            rankdir="LR";
+            bgcolor="transparent";
+            node [shape="box", style="filled", fillcolor="#f0f2f6", fontname="Helvetica"];
+            edge [color="#bdc3c7"];
+        """
+        
+        # 2. 데이터를 순회하며 노드와 엣지(연결선) 텍스트 생성
         for index, row in df.iterrows():
-            # 메인 개념 노드
-            concept = row['concept']
-            # 개념 노드 추가 (파란색)
-            graph.node(concept, style='filled', fillcolor='#d4e6f1', color='#3498db', penwidth='2')
+            concept = row['concept'].replace('"', "'") # 에러 방지용 따옴표 처리
             
-            # 태그 처리 및 연결
+            # 개념 노드 (파란색)
+            dot_source += f'    "{concept}" [style="filled", fillcolor="#d4e6f1", color="#3498db", penwidth="2"];\n'
+            
+            # 태그 연결
             if row['tags']:
                 tags = [t.strip() for t in row['tags'].split(',')]
                 for tag in tags:
                     if tag:
-                        # 태그 노드 추가 (타원형, 회색)
-                        graph.node(tag, shape='ellipse', style='filled', fillcolor='#eaecee', color='#95a5a6')
-                        # 개념 -> 태그 연결
-                        graph.edge(concept, tag)
+                        tag_clean = tag.replace('"', "'")
+                        # 태그 노드 (타원형) 및 연결
+                        dot_source += f'    "{tag_clean}" [shape="ellipse", style="filled", fillcolor="#eaecee", color="#95a5a6"];\n'
+                        dot_source += f'    "{concept}" -> "{tag_clean}";\n'
+
+        # 3. 그래프 닫기
+        dot_source += "}"
         
-        # 그래프 렌더링
-        st.graphviz_chart(graph, use_container_width=True)
-        st.caption("💡 개념(파란색)과 태그(회색)가 어떻게 연결되는지 보여줍니다.")
+        # 4. Streamlit 내장 함수로 렌더링 (라이브러리 불필요)
+        st.graphviz_chart(dot_source, use_container_width=True)
+        st.caption("💡 개념(Blue)과 태그(Grey)가 어떻게 연결되는지 보여줍니다.")
 
 # ==========================================
 # [ENGINE] Input Form
