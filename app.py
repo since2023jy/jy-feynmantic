@@ -6,7 +6,6 @@ import json
 import urllib.request
 import urllib.error
 import time
-import random
 from datetime import datetime as dt
 
 # ==========================================
@@ -26,7 +25,6 @@ def init_db():
             status TEXT DEFAULT 'active'
         )
     ''')
-    # 채팅 로그 저장을 위한 테이블 추가
     c.execute('''
         CREATE TABLE IF NOT EXISTS chat_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,68 +70,82 @@ def get_recent_thoughts():
 init_db()
 
 # ==========================================
-# [AI AGENT] The Librarian (사서)
+# [AI AGENT] Debugged Version
 # ==========================================
 def analyze_and_archive(api_key, user_input):
-    """
-    유저의 채팅을 분석해서, 지식으로 저장할 가치가 있으면 JSON으로 추출함.
-    """
-    if not api_key: return None, "API Key가 없습니다."
+    if not api_key: return None, "사이드바에 API Key를 먼저 입력해주세요."
     
-    # 1. 일반 대화인지, 지식 입력인지 판단 & 추출
-    # 시스템 프롬프트: 넌 지식 관리자야. 유저 말에서 개념/설명/반증/태그를 추출해.
     prompt = f"""
     You are an intelligent Knowledge Archivist.
     Analyze the user's input: "{user_input}"
     
-    If the input contains a piece of knowledge or an idea worth saving, extract it into this JSON format:
+    If it contains knowledge worth saving, extract it into this JSON:
     {{
         "is_knowledge": true,
-        "concept": "Core topic (short)",
-        "explanation": "Simple explanation (Feynman style)",
-        "falsification": "Counter-argument or limitation (Popper style) - infer if not present",
-        "tags": "3 keywords (Deutsch style)",
-        "reply": "A brief, encouraging response to the user acknowledging the save."
+        "concept": "Topic",
+        "explanation": "Simple explanation",
+        "falsification": "Limitation",
+        "tags": "3 keywords",
+        "reply": "Short confirmation."
     }}
     
-    If it's just casual chat (hello, thanks, etc.), return this JSON:
+    If it's casual chat, return this JSON:
     {{
         "is_knowledge": false,
-        "reply": "Reply naturally to the conversation."
+        "reply": "Natural response."
     }}
     
     Output ONLY the JSON string.
     """
     
-    models = ["gemini-1.5-flash", "gemini-pro"]
+    # [FIX] 모델 리스트 최신화 (안정성 확보)
+    models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.0-pro"]
+    
     data = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
     
+    last_error = ""
+    
     for model in models:
         try:
-            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}", data=data, headers=headers)
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            req = urllib.request.Request(url, data=data, headers=headers)
+            
             with urllib.request.urlopen(req) as res:
                 res_text = json.loads(res.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text'].strip()
-                # JSON 파싱 (마크다운 코드블록 제거)
-                if "```json" in res_text:
-                    res_text = res_text.split("```json")[1].split("```")[0]
-                elif "```" in res_text:
-                    res_text = res_text.split("```")[1].split("```")[0]
-                return json.loads(res_text), None
-        except Exception as e:
+                
+                # JSON 정제 (마크다운 제거)
+                clean_text = res_text.replace("```json", "").replace("```", "").strip()
+                
+                try:
+                    return json.loads(clean_text), None
+                except json.JSONDecodeError:
+                    last_error = f"JSON 파싱 실패 (모델 응답이 이상함): {clean_text[:50]}..."
+                    continue # 다음 모델 시도
+
+        except urllib.error.HTTPError as e:
+            last_error = f"HTTP Error {e.code}: {e.reason}"
             continue
-    return None, "AI 연결 실패"
+        except Exception as e:
+            last_error = f"System Error: {str(e)}"
+            continue
+            
+    return None, f"AI 연결 실패 ({last_error})"
 
 # ==========================================
 # [UI] Chat Interface
 # ==========================================
-st.set_page_config(page_title="FeynmanTic Chat", page_icon="💬", layout="centered") # 모바일 친화적 centered
+st.set_page_config(page_title="FeynmanTic Chat", page_icon="💬", layout="centered")
 
-# 사이드바 (설정)
+# 사이드바
 with st.sidebar:
-    st.title("⚙️ Settings")
-    google_api_key = st.text_input("Google API Key", type="password")
-    if st.button("🗑 대화 내용 초기화"):
+    st.title("⚙️ 설정")
+    # [중요] 키 입력 강조
+    google_api_key = st.text_input("Google API Key", type="password", placeholder="여기에 키를 입력하세요")
+    if not google_api_key:
+        st.warning("👈 여기에 키를 넣어야 작동합니다!")
+        
+    if st.button("🗑 대화 초기화"):
         conn = sqlite3.connect('feynman.db', check_same_thread=False)
         conn.execute("DELETE FROM chat_logs")
         conn.commit()
@@ -141,65 +153,50 @@ with st.sidebar:
         st.rerun()
         
     st.divider()
-    st.subheader("📚 최근 저장된 지식")
+    st.caption("최근 지식")
     recent = get_recent_thoughts()
     if not recent.empty:
         for _, row in recent.iterrows():
-            st.caption(f"🔹 {row['concept']}")
-            with st.popover("내용 보기"):
-                st.write(f"**설명:** {row['explanation']}")
-                st.write(f"**반증:** {row['falsification']}")
-                st.write(f"**태그:** {row['tags']}")
+            st.text(f"🔹 {row['concept']}")
 
-# 메인 채팅 화면
+# 메인
 st.title("🧠 FeynmanTic OS")
-st.caption("Just talk. I'll organize your thoughts.")
+st.caption("v12.1 Debug Edition")
 
-# 1. 채팅 기록 표시
+# 기록
 history = get_chat_history()
 for _, row in history.iterrows():
     with st.chat_message(row['role']):
         st.write(row['content'])
 
-# 2. 사용자 입력
-if prompt := st.chat_input("생각나는 것을 자유롭게 말해보세요..."):
-    # 유저 메시지 표시 및 저장
+# 입력
+if prompt := st.chat_input("생각을 입력하세요..."):
     with st.chat_message("user"):
         st.write(prompt)
     save_chat("user", prompt)
     
-    # 3. AI 처리
     if google_api_key:
         with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            message_placeholder.markdown("Thinking...")
-            
-            # AI 분석
-            result_json, error = analyze_and_archive(google_api_key, prompt)
-            
-            if error:
-                response_text = f"⚠️ 오류: {error}"
-            else:
-                response_text = result_json.get("reply", "...")
+            with st.spinner("Analyzing..."):
+                result_json, error = analyze_and_archive(google_api_key, prompt)
                 
-                # 지식이면 DB 저장 액션 수행
-                if result_json.get("is_knowledge"):
-                    c = result_json.get("concept")
-                    e = result_json.get("explanation")
-                    f = result_json.get("falsification")
-                    t = result_json.get("tags")
+                if error:
+                    st.error(f"⚠️ {error}")
+                    save_chat("assistant", f"Error: {error}")
+                else:
+                    reply = result_json.get("reply", "...")
+                    st.write(reply)
+                    save_chat("assistant", reply)
                     
-                    save_thought(c, e, f, t)
-                    
-                    # 저장 확인 UI (채팅방 내에 카드처럼 표시)
-                    st.success(f"💾 **지식 저장됨:** {c}")
-                    with st.expander("저장된 내용 확인"):
-                        st.markdown(f"**Feynman:** {e}")
-                        st.markdown(f"**Popper:** {f}")
-                        st.caption(f"#{t}")
-            
-            # AI 응답 표시 및 저장
-            message_placeholder.markdown(response_text)
-            save_chat("assistant", response_text)
+                    if result_json.get("is_knowledge"):
+                        c = result_json.get("concept")
+                        e = result_json.get("explanation")
+                        f = result_json.get("falsification")
+                        t = result_json.get("tags")
+                        save_thought(c, e, f, t)
+                        st.toast(f"💾 지식 저장 완료: {c}", icon="✅")
+                        with st.expander("저장된 카드 보기"):
+                            st.info(e)
+                            st.caption(f"반론: {f}")
     else:
-        st.error("API 키를 먼저 입력해주세요.")
+        st.error("좌측 사이드바를 열어 API Key를 입력해주세요!")
