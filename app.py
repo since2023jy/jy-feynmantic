@@ -9,13 +9,15 @@ import urllib.error
 import time
 import xml.etree.ElementTree as ET
 import random
+from datetime import datetime as dt, timedelta
 
 # ==========================================
-# [DATABASE]
+# [CTO] DATABASE MIGRATION (v11.0)
 # ==========================================
 def init_db():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
     c = conn.cursor()
+    # 테이블 생성 (기존 테이블이 있으면 무시되지만, 컬럼 추가를 위해 체크)
     c.execute('''
         CREATE TABLE IF NOT EXISTS thoughts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,41 +25,87 @@ def init_db():
             explanation TEXT NOT NULL,
             falsification TEXT,
             tags TEXT,
-            created_at TEXT
+            created_at TEXT,
+            updated_at TEXT,
+            status TEXT DEFAULT 'active', 
+            health INTEGER DEFAULT 100
         )
     ''')
+    
+    # v11.0 마이그레이션: 컬럼이 없을 경우 추가 (SQLite 특성상 try-except로 처리)
+    try:
+        c.execute("ALTER TABLE thoughts ADD COLUMN status TEXT DEFAULT 'active'")
+    except: pass
+    try:
+        c.execute("ALTER TABLE thoughts ADD COLUMN health INTEGER DEFAULT 100") # 지식의 건강 상태 (0~100)
+    except: pass
+    try:
+        c.execute("ALTER TABLE thoughts ADD COLUMN updated_at TEXT")
+    except: pass
+    
     conn.commit()
     conn.close()
 
-def save_thought_to_db(concept, explanation, falsification, tags):
+# 지식 저장 (Inbox로 보냄)
+def save_to_inbox(concept, expl, fals, tags, source="manual"):
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
     c = conn.cursor()
-    created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    # AI가 만든건 pending(보류), 내가 만든건 active(활성)
+    status = 'pending' if source == "ai" else 'active'
+    
     c.execute('''
-        INSERT INTO thoughts (concept, explanation, falsification, tags, created_at)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (concept, explanation, falsification, tags, created_at))
+        INSERT INTO thoughts (concept, explanation, falsification, tags, created_at, updated_at, status, health)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 100)
+    ''', (concept, expl, fals, tags, now, now, status))
     conn.commit()
     conn.close()
 
-def get_all_thoughts():
+# 지식 승인 (Pending -> Active)
+def approve_thought(thought_id):
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
-    query = "SELECT * FROM thoughts ORDER BY id DESC"
-    df = pd.read_sql_query(query, conn)
+    c = conn.cursor()
+    c.execute("UPDATE thoughts SET status = 'active', health = 100, updated_at = ? WHERE id = ?", 
+              (dt.now().strftime("%Y-%m-%d %H:%M:%S"), thought_id))
+    conn.commit()
+    conn.close()
+
+# 지식 복습 (Watering) - 건강 회복
+def water_thought(thought_id):
+    conn = sqlite3.connect('feynman.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE thoughts SET health = 100, updated_at = ? WHERE id = ?", 
+              (dt.now().strftime("%Y-%m-%d %H:%M:%S"), thought_id))
+    conn.commit()
+    conn.close()
+
+def delete_thought(thought_id):
+    conn = sqlite3.connect('feynman.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("DELETE FROM thoughts WHERE id = ?", (thought_id,))
+    conn.commit()
+    conn.close()
+
+def get_thoughts(status='active'):
+    conn = sqlite3.connect('feynman.db', check_same_thread=False)
+    # health 계산 로직 포함
+    df = pd.read_sql_query(f"SELECT * FROM thoughts WHERE status = '{status}' ORDER BY id DESC", conn)
     conn.close()
     return df
 
-def delete_thought_from_db(thought_id):
+# [Duolingo Logic] 지식 부패 시뮬레이션
+def calculate_decay():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute('DELETE FROM thoughts WHERE id = ?', (thought_id,))
+    # 하루에 10씩 건강 감소
+    c.execute("UPDATE thoughts SET health = health - 5 WHERE health > 0 AND status = 'active'")
     conn.commit()
     conn.close()
 
 init_db()
 
 # ==========================================
-# [AI LOGIC]
+# [PALANTIR] AI INTELLIGENCE
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_google_news_kr():
@@ -66,242 +114,203 @@ def get_google_news_kr():
         with urllib.request.urlopen(url) as response:
             xml_data = response.read()
             root = ET.fromstring(xml_data)
-            news_items = []
-            for item in root.findall('.//item')[:10]: # 10개로 늘림
-                title = item.find('title').text
-                if ' - ' in title: title = title.split(' - ')[0]
-                news_items.append(title)
-            return news_items
-    except: return ["인공지능", "양자역학", "경제 위기", "기후 변화"]
+            return [item.find('title').text.split(' - ')[0] for item in root.findall('.//item')[:5]]
+    except: return ["AI", "경제", "과학"]
 
-def call_gemini_brain(api_key, prompt):
+def call_gemini(api_key, prompt):
     if not api_key: return "API Key 없음"
     models = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
-    encoded_data = json.dumps(data).encode('utf-8')
+    data = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
-    
     for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         try:
-            req = urllib.request.Request(url, data=encoded_data, headers=headers)
-            with urllib.request.urlopen(req) as response:
-                res_json = json.loads(response.read().decode('utf-8'))
-                return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}", data=data, headers=headers)
+            with urllib.request.urlopen(req) as res:
+                return json.loads(res.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text'].strip()
         except: continue
-    return "AI 연결 실패"
+    return "연결 실패"
 
-def auto_think_process(api_key, concept):
-    """
-    관전 모드용: 한 번에 파인만-포퍼-도이치를 수행하여 결과 반환
-    """
-    # 1. 파인만 (설명)
-    expl = call_gemini_brain(api_key, f"개념 '{concept}'을 12살 아이에게 설명하듯 쉬운 비유를 들어 2문장으로 설명해줘. (한국어)")
-    # 2. 포퍼 (반증)
-    fals = call_gemini_brain(api_key, f"개념 '{concept}'의 치명적인 한계점이나 예외 상황 1가지만 짧게 지적해줘.")
-    # 3. 도이치 (태그)
-    tags = call_gemini_brain(api_key, f"개념 '{concept}' 관련 핵심 태그 2개만 쉼표로 구분해줘.")
-    
+def auto_generate(api_key, concept):
+    expl = call_gemini(api_key, f"'{concept}' 12살 설명 (2문장)")
+    fals = call_gemini(api_key, f"'{concept}' 반론/예외 (1문장)")
+    tags = call_gemini(api_key, f"'{concept}' 태그 2개 (쉼표구분)")
     return expl, fals, tags
 
 # ==========================================
-# [STATE]
+# [UI] DASHBOARD
 # ==========================================
-if 'step' not in st.session_state: st.session_state.step = 1
-# 위저드 상태들...
-for key in ['w_concept', 'w_briefing', 'w_expl', 'w_fals', 'w_tags', 'exam_score', 'exam_feedback', 'broker_result']:
-    if key not in st.session_state: st.session_state[key] = ""
+st.set_page_config(page_title="FeynmanTic Garden", page_icon="🌿", layout="wide")
 
-def next_step(): st.session_state.step += 1
-def prev_step(): st.session_state.step -= 1
-def reset_wizard():
-    st.session_state.step = 1
-    for key in ['w_concept', 'w_briefing', 'w_expl', 'w_fals', 'w_tags', 'exam_score', 'exam_feedback', 'broker_result']:
-        st.session_state[key] = ""
-
-# ==========================================
-# [UI SETUP]
-# ==========================================
-st.set_page_config(page_title="FeynmanTic Spectator", page_icon="👁️", layout="wide")
-df = get_all_thoughts()
-
-# 사이드바
+# 사이드바 설정
 with st.sidebar:
-    st.title("👁️ Control Tower")
-    google_api_key = st.text_input("Google API Key", type="password", placeholder="AI Studio Key")
+    st.title("🌿 Digital Garden")
+    google_api_key = st.text_input("Google API Key", type="password")
     
     st.markdown("---")
     
-    # [NEW] 관전 모드 토글
-    spectator_mode = st.toggle("👁️ 관전 모드 (Auto-Play)", value=False)
-    
-    if spectator_mode and not google_api_key:
-        st.error("관전 모드는 AI 키가 필요합니다.")
-    
-    st.markdown("---")
-    st.metric("Total Insights", len(df))
-    st.caption("FeynmanTic v10.0 God Mode")
-
-# ==========================================
-# [SPECTATOR MODE LOGIC]
-# ==========================================
-if spectator_mode and google_api_key:
-    st.title("🌌 The Spectator Mode")
-    st.info("엔진이 스스로 지식을 탐식하고 확장하는 중입니다... (자동 실행 중)")
-    
-    # 1. 주제 선정 (랜덤)
-    status_text = st.empty()
-    status_text.markdown("### 📡 1. 뉴스 데이터 스캔 중...")
-    
-    news_pool = get_google_news_kr()
-    target_concept = random.choice(news_pool)
-    
-    # 중복 방지 (이미 있는 건 패스하려 노력)
-    existing_concepts = df['concept'].tolist() if not df.empty else []
-    if target_concept in existing_concepts:
-        target_concept = f"{target_concept} (심화)"
-    
-    time.sleep(1)
-    status_text.markdown(f"### 🎯 2. 목표 포착: **{target_concept}**")
-    
-    # 2. AI 사고 과정 시각화
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.caption("🗣 Feynman (Simplicity)")
-        f_box = st.empty()
-        f_box.info("Thinking...")
-    with col2:
-        st.caption("🛡 Popper (Falsification)")
-        p_box = st.empty()
-        p_box.info("Waiting...")
-    with col3:
-        st.caption("🔗 Deutsch (Connection)")
-        d_box = st.empty()
-        d_box.info("Waiting...")
+    # [GOD MODE] 관전 스위치
+    spectator = st.toggle("👁️ 관전 모드 (Auto-Gather)", value=False)
+    if spectator and google_api_key:
+        st.success("🤖 AI가 검역소(Inbox)로 지식을 나르고 있습니다...")
         
-    # 실제 AI 호출
-    expl, fals, tags = auto_think_process(google_api_key, target_concept)
-    
-    # 결과 순차적 표시 (애니메이션 효과)
-    time.sleep(1)
-    f_box.success(expl)
-    time.sleep(1)
-    p_box.warning(fals)
-    time.sleep(1)
-    d_box.success(f"#{tags}")
-    
-    status_text.markdown(f"### 💾 3. 지식 저장소 동기화 중...")
-    save_thought_to_db(target_concept, expl, fals, tags)
-    
-    time.sleep(2)
-    st.rerun() # 무한 루프 (새로고침)
+        # 자동 수집 로직 (백그라운드 실행 흉내)
+        if st.button("수동 트리거: 뉴스 수집 1회 실행"):
+            news_item = random.choice(get_google_news_kr())
+            with st.spinner(f"AI가 '{news_item}' 분석 중..."):
+                e, f, t = auto_generate(google_api_key, news_item)
+                save_to_inbox(news_item, e, f, t, source="ai")
+                st.toast(f"📦 '{news_item}' 검역소 도착!", icon="🚚")
+                time.sleep(1)
+
+    st.markdown("---")
+    # [Duolingo] 부패 시스템
+    if st.button("⏳ 시간 경과 시뮬레이션 (Decay)"):
+        calculate_decay()
+        st.toast("시간이 흘러 지식들이 낡았습니다...", icon="🥀")
+        time.sleep(1); st.rerun()
+
+# 메인 화면
+st.title("🧠 FeynmanTic v11.0")
+
+# 탭 구조 개편: 정원(뇌) -> 검역소(보류) -> 연구실(입력)
+tab_garden, tab_inbox, tab_lab = st.tabs(["🌳 나의 뇌 (Garden)", "📦 검역소 (Inbox)", "🔬 연구실 (Lab)"])
 
 # ==========================================
-# [MANUAL MODE] (관전 모드가 꺼져있을 때)
+# 1. THE GARDEN (메인 그래프 & 리스트)
 # ==========================================
-elif not spectator_mode:
-    st.title("🧠 FeynmanTic v10.0")
+with tab_garden:
+    active_df = get_thoughts('active')
     
-    # Wizard UI (기존 수동 모드)
-    # --- STEP 1 ---
-    if st.session_state.step == 1:
-        st.header("Step 1. 주제 선정")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("News Feed")
-            for news in get_google_news_kr()[:4]:
-                if st.button(f"👉 {news}", key=news):
-                    st.session_state.w_concept = news
-                    next_step(); st.rerun()
-        with c2:
-            st.caption("Manual Input")
-            m = st.text_input("주제")
-            if st.button("Start"):
-                st.session_state.w_concept = m
-                next_step(); st.rerun()
-
-    # --- STEP 2 (Briefing) ---
-    elif st.session_state.step == 2:
-        st.header(f"Step 2. 학습: {st.session_state.w_concept}")
-        if not st.session_state.w_briefing and google_api_key:
-            with st.spinner("AI Briefing..."):
-                st.session_state.w_briefing = call_gemini_brain(google_api_key, f"'{st.session_state.w_concept}' 핵심 요약 3줄")
-                st.rerun()
-        st.info(st.session_state.w_briefing)
-        if st.button("Next"): next_step(); st.rerun()
-
-    # --- STEP 3 (Feynman) ---
-    elif st.session_state.step == 3:
-        st.header("Step 3. 설명")
-        c1, c2 = st.columns(2)
-        a = c1.text_input("비유 (A는 B다)", placeholder="예: API는 웨이터다")
-        r = c2.text_input("이유 (왜냐하면)", placeholder="주문을 전달하니까")
-        if a and r:
-            curr = f"**{st.session_state.w_concept}**은(는) **{a}**와 같다. 왜냐하면 **{r}** 때문이다."
-            st.write(curr.replace("**",""))
-            if st.button("AI 검사"):
-                if google_api_key:
-                    res = call_gemini_brain(google_api_key, f"설명 평가: {curr}. 점수(0-100)와 피드백 1줄 줘.")
-                    st.session_state.exam_feedback = res
-                    st.rerun()
-            if st.session_state.exam_feedback:
-                st.caption(st.session_state.exam_feedback)
-                if st.button("Pass"): st.session_state.w_expl=curr.replace("**",""); next_step(); st.rerun()
-
-    # --- STEP 4 (Popper) ---
-    elif st.session_state.step == 4:
-        st.header("Step 4. 반증")
-        q = st.text_input("예외 상황은?")
-        if st.button("Next"): st.session_state.w_fals=q; next_step(); st.rerun()
-
-    # --- STEP 5 (Save) ---
-    elif st.session_state.step == 5:
-        st.header("Step 5. 저장")
-        t = st.text_input("태그")
-        if st.button("Save"):
-            save_thought_to_db(st.session_state.w_concept, st.session_state.w_expl, st.session_state.w_fals, t)
-            st.balloons(); reset_wizard(); st.rerun()
-
-# ==========================================
-# [GRAPH VISUALIZATION] (Always Visible)
-# ==========================================
-st.markdown("---")
-with st.expander("🕸 Living Knowledge Universe", expanded=True):
-    if not df.empty:
+    # [Palantir Logic] 그래프 시각화 (건강 상태 반영)
+    if not active_df.empty:
         nodes, edges, exist = [], [], set()
-        for _, r in df.iterrows():
-            if r['concept'] not in exist:
-                nodes.append(f"{{id:'{r['concept']}', label:'{r['concept']}', group:'concept'}}")
-                exist.add(r['concept'])
-            if r['tags']:
-                for tg in r['tags'].split(','):
-                    tg = tg.strip()
-                    if tg and tg not in exist:
-                        nodes.append(f"{{id:'{tg}', label:'{tg}', group:'tag'}}")
-                        exist.add(tg)
-                    edges.append(f"{{from:'{r['concept']}', to:'{tg}'}}")
         
-        # 그래프 높이를 좀 더 키우고, 물리 엔진 설정을 부드럽게 조정
+        for _, r in active_df.iterrows():
+            # 건강 상태에 따른 색상 변화 (싱싱함=파랑, 썩음=회색)
+            health = r.get('health', 100)
+            if health is None: health = 100
+            
+            # Duolingo Style: 건강이 나쁘면 회색으로 변하고 작아짐
+            if health > 70: color, size = "#3498db", 25 # Blue
+            elif health > 30: color, size = "#f1c40f", 20 # Yellow
+            else: color, size = "#95a5a6", 15 # Gray (Dying)
+            
+            c_id = r['concept']
+            if c_id not in exist:
+                nodes.append(f"{{id:'{c_id}', label:'{c_id}', group:'concept', color:'{color}', size:{size}}}")
+                exist.add(c_id)
+            
+            if r['tags']:
+                for t in r['tags'].split(','):
+                    t = t.strip()
+                    if t and t not in exist:
+                        nodes.append(f"{{id:'{t}', label:'{t}', group:'tag'}}")
+                        exist.add(t)
+                    edges.append(f"{{from:'{c_id}', to:'{t}'}}")
+
         html = f"""<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-        <div id="mynetwork" style="height:500px; border:1px solid #eee; background-color: #f8f9fa;"></div>
+        <div id="mynetwork" style="height:500px; border:1px solid #eee; background:#fafafa;"></div>
         <script>
-        var container = document.getElementById('mynetwork');
         var data = {{nodes: new vis.DataSet([{','.join(nodes)}]), edges: new vis.DataSet([{','.join(edges)}])}};
         var options = {{
-            nodes: {{ shape: 'dot', size: 20, font: {{ size: 14, face: 'Helvetica' }} }},
-            groups: {{ 
-                concept: {{ color: {{ background: '#3498db', border: '#2980b9' }} }}, 
-                tag: {{ color: {{ background: '#bdc3c7', border: '#95a5a6' }}, shape: 'ellipse' }} 
-            }},
-            physics: {{ 
-                enabled: true,
-                solver: 'forceAtlas2Based',
-                forceAtlas2Based: {{ gravitationalConstant: -50, centralGravity: 0.005, springLength: 100, springConstant: 0.08 }},
-                stabilization: {{ iterations: 200 }} 
-            }},
-            layout: {{ randomSeed: 2 }}
+            nodes: {{ font: {{ face:'Helvetica', color:'#333' }} }},
+            groups: {{ tag: {{ color:'#e0e0e0', shape:'ellipse', size:10 }} }},
+            physics: {{ solver:'forceAtlas2Based', stabilization:{{iterations:150}} }},
+            interaction: {{ hover:true }}
         }};
-        new vis.Network(container, data, options);
+        new vis.Network(document.getElementById('mynetwork'), data, options);
         </script>"""
         components.html(html, height=520)
-    else: st.info("데이터가 없습니다.")
+        
+        # 리스트 뷰 (물주기 기능)
+        st.subheader("🥀 관리 필요한 지식 (클릭해서 물주기)")
+        
+        # 건강 나쁜 순으로 정렬
+        dying_df = active_df.sort_values(by='health', ascending=True)
+        
+        for idx, row in dying_df.iterrows():
+            health = row.get('health', 100)
+            if health is None: health = 100
+            
+            # 카드 스타일
+            border_color = "#eee" if health > 70 else "#ffcccc" # 죽어가면 빨간 테두리
+            
+            with st.expander(f"{'🥀' if health < 50 else '🌿'} {row['concept']} (건강: {health}%)"):
+                st.write(f"**설명:** {row['explanation']}")
+                st.write(f"**반증:** {row['falsification']}")
+                
+                c1, c2 = st.columns([1, 4])
+                with c1:
+                    if st.button("💧 물주기 (복습)", key=f"water_{row['id']}"):
+                        water_thought(row['id'])
+                        st.toast(f"'{row['concept']}' 지식이 생생해졌습니다!", icon="✨")
+                        time.sleep(1); st.rerun()
+                with c2:
+                    if st.button("🗑 삭제", key=f"del_{row['id']}"):
+                        delete_thought(row['id']); st.rerun()
+
+    else:
+        st.info("정원이 비어있습니다. '연구실'이나 '검역소'에서 지식을 심으세요.")
+
+# ==========================================
+# 2. THE INBOX (검역소 - AI 생성 데이터)
+# ==========================================
+with tab_inbox:
+    st.subheader("📦 지식 검역소 (Pending Knowledge)")
+    st.caption("AI가 수집한 지식입니다. 승인하지 않으면 내 것이 아닙니다.")
+    
+    pending_df = get_thoughts('pending')
+    
+    if not pending_df.empty:
+        for idx, row in pending_df.iterrows():
+            with st.container():
+                st.markdown(f"#### 🗞 {row['concept']}")
+                st.info(f"**설명:** {row['explanation']}")
+                st.warning(f"**반증:** {row['falsification']}")
+                st.caption(f"Tags: {row['tags']}")
+                
+                c1, c2, c3 = st.columns([1, 1, 3])
+                with c1:
+                    if st.button("✅ 승인 (내 뇌로 이동)", key=f"app_{row['id']}", type="primary"):
+                        approve_thought(row['id'])
+                        st.toast("지식이 정원에 심어졌습니다!", icon="🌳")
+                        time.sleep(1); st.rerun()
+                with c2:
+                    if st.button("❌ 거절 (삭제)", key=f"rej_{row['id']}"):
+                        delete_thought(row['id'])
+                        st.rerun()
+                st.divider()
+    else:
+        st.success("검역소가 깨끗합니다. 관전 모드를 켜서 AI에게 수집을 시키세요.")
+
+# ==========================================
+# 3. THE LAB (직접 입력)
+# ==========================================
+with tab_lab:
+    st.subheader("🔬 지식 연구실 (Manual Input)")
+    
+    # 간소화된 위저드
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        lc = st.text_input("개념 (Concept)")
+    with c2:
+        if st.button("✨ AI 자동완성 요청"):
+            if lc and google_api_key:
+                le, lf, lt = auto_generate(google_api_key, lc)
+                st.session_state.temp_e = le
+                st.session_state.temp_f = lf
+                st.session_state.temp_t = lt
+                st.rerun()
+    
+    le = st.text_area("설명 (Feynman)", value=st.session_state.get('temp_e', ''))
+    lf = st.text_input("반증 (Popper)", value=st.session_state.get('temp_f', ''))
+    lt = st.text_input("태그 (Deutsch)", value=st.session_state.get('temp_t', ''))
+    
+    if st.button("💾 연구 완료 (정원에 바로 심기)", type="primary"):
+        if lc and le:
+            save_to_inbox(lc, le, lf, lt, source="manual") # manual은 내부 로직에서 active로 처리됨
+            st.session_state.temp_e = ""
+            st.session_state.temp_f = ""
+            st.session_state.temp_t = ""
+            st.toast("연구 성공! 정원에 등록되었습니다.")
+            time.sleep(1); st.rerun()
