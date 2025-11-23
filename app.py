@@ -43,10 +43,10 @@ def get_data():
 init_db()
 
 # ==========================================
-# [AI PT LOGIC - STABLE FIX]
+# [AI PT LOGIC - ROBUST CONNECTION]
 # ==========================================
 def run_mental_gym(api_key, history):
-    if not api_key: return None, "🚫 API Key가 없습니다. 사이드바를 확인하세요."
+    if not api_key: return None, "🚫 API Key가 없습니다."
     
     # 1. 시스템 프롬프트
     system_instruction = {
@@ -80,52 +80,71 @@ def run_mental_gym(api_key, history):
             "parts": [{"text": msg['content']}]
         })
     
-    # 3. 요청 데이터 조립
     request_data = {
         "system_instruction": system_instruction,
         "contents": contents
     }
     
-    # [FIX] 가장 안정적인 최신 모델 1개만 사용 (404 에러 방지)
-    model = "gemini-1.5-flash" 
-    headers = {'Content-Type': 'application/json'}
+    # [FIX] 가능한 모든 모델명 리스트 (순서대로 시도)
+    # gemini-pro는 가장 범용적이라 성공 확률이 높습니다.
+    models_to_try = [
+        "gemini-1.5-flash",
+        "gemini-pro", 
+        "gemini-1.5-pro-latest",
+        "gemini-1.0-pro"
+    ]
     
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        req = urllib.request.Request(url, data=json.dumps(request_data).encode('utf-8'), headers=headers)
-        
-        with urllib.request.urlopen(req) as res:
-            response = json.loads(res.read().decode('utf-8'))
+    headers = {'Content-Type': 'application/json'}
+    last_error_msg = ""
+
+    for model in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            req = urllib.request.Request(url, data=json.dumps(request_data).encode('utf-8'), headers=headers)
             
-            if 'candidates' in response and response['candidates']:
-                text = response['candidates'][0]['content']['parts'][0]['text']
+            with urllib.request.urlopen(req) as res:
+                response = json.loads(res.read().decode('utf-8'))
                 
-                # JSON(합격)인지 확인
-                if "{" in text and "passed" in text:
-                    try:
-                        clean_json = text[text.find('{'):text.rfind('}')+1]
-                        return json.loads(clean_json), None
-                    except:
+                if 'candidates' in response and response['candidates']:
+                    text = response['candidates'][0]['content']['parts'][0]['text']
+                    
+                    if "{" in text and "passed" in text:
+                        try:
+                            clean_json = text[text.find('{'):text.rfind('}')+1]
+                            return json.loads(clean_json), None
+                        except:
+                            return {"status": "coaching", "text": text}, None
+                    else:
                         return {"status": "coaching", "text": text}, None
                 else:
-                    return {"status": "coaching", "text": text}, None
-            else:
-                return None, "AI가 빈 응답을 보냈습니다."
+                    last_error_msg = "빈 응답"
+                    continue # 다음 모델 시도
 
-    except urllib.error.HTTPError as e:
-        if e.code == 400: return None, f"400 Bad Request: 요청 형식이 잘못되었습니다."
-        elif e.code == 401: return None, f"401 Unauthorized: API Key가 틀렸습니다."
-        elif e.code == 404: return None, f"404 Not Found: 모델({model})을 찾을 수 없습니다."
-        else: return None, f"HTTP Error {e.code}: {e.reason}"
-    except Exception as e:
-        return None, f"System Error: {str(e)}"
+        except urllib.error.HTTPError as e:
+            # 404면 모델이 없는 것이니 다음 모델 시도 (continue)
+            if e.code == 404:
+                last_error_msg = f"{model} 모델 없음(404), 다음 시도..."
+                continue
+            elif e.code == 400:
+                # 400 에러는 요청 형식이 안맞는 경우일 수 있음. gemini-pro로 넘어가서 시도
+                last_error_msg = f"{model} 요청 오류(400), 다음 시도..."
+                continue
+            elif e.code == 401:
+                return None, "🚫 API Key가 틀렸습니다. (401 Unauthorized)"
+            else:
+                last_error_msg = f"HTTP Error {e.code}"
+                continue
+        except Exception as e:
+            last_error_msg = str(e)
+            continue
+            
+    return None, f"모든 AI 모델 연결 실패. (마지막 에러: {last_error_msg})"
 
 # ==========================================
 # [UI] GYM INTERFACE
 # ==========================================
 st.set_page_config(page_title="FeynmanTic Gym", page_icon="🏋️", layout="wide")
 
-# Sidebar
 with st.sidebar:
     st.title("🏋️ FeynmanTic Gym")
     st.caption("No Pain, No Brain.")
@@ -138,7 +157,6 @@ with st.sidebar:
         conn.commit(); conn.close()
         st.rerun()
 
-# Layout
 col_graph, col_chat = st.columns([1, 1])
 
 # 1. Graph
