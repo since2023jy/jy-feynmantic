@@ -9,9 +9,9 @@ import plotly.express as px
 from datetime import datetime
 
 # ==========================================
-# [Layer 0] System Config
+# [Layer 0] Config & Styles
 # ==========================================
-st.set_page_config(page_title="FeynmanTic V11", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="FeynmanTic V11.5", page_icon="⚡", layout="centered")
 
 st.markdown("""
     <style>
@@ -23,7 +23,6 @@ st.markdown("""
     .gate-badge { font-size: 0.7rem; padding: 4px 8px; border-radius: 20px; background: #21262D; color: #6E7681; border: 1px solid #30363D; margin-right: 3px; }
     .gate-active { background: rgba(255, 75, 75, 0.1); color: #FF4B4B; border-color: #FF4B4B; font-weight: bold; }
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; background-color: #21262D; color: #C9D1D9; border: 1px solid #30363D; }
-    .stButton button:hover { border-color: #7C4DFF; color: #7C4DFF; }
     .stTextInput input { background-color: #0d1117 !important; color: #fff !important; border: 1px solid #30363d !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -32,14 +31,14 @@ st.markdown("""
 # [Layer 1] Logic & Data
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('feynmantic_final.db')
+    conn = sqlite3.connect('feynmantic_debug.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, topic TEXT, mode TEXT, dialogue TEXT, score_json TEXT)''')
     conn.commit()
     conn.close()
 
 def save_log(topic, mode, messages, score_data=None):
-    conn = sqlite3.connect('feynmantic_final.db')
+    conn = sqlite3.connect('feynmantic_debug.db')
     c = conn.cursor()
     c.execute('INSERT INTO logs (timestamp, topic, mode, dialogue, score_json) VALUES (?, ?, ?, ?, ?)',
               (datetime.now().strftime("%Y-%m-%d"), topic, mode, json.dumps(messages, ensure_ascii=False), json.dumps(score_data) if score_data else None))
@@ -47,125 +46,86 @@ def save_log(topic, mode, messages, score_data=None):
     conn.close()
 
 def get_spectator_feed():
-    return [
-        {"topic": "비트코인", "user_view": "디지털 에너지다.", "f_score": 92, "likes": 128},
-        {"topic": "자유의지", "user_view": "화학작용일 뿐.", "f_score": 88, "likes": 95},
-        {"topic": "AI 규제", "user_view": "통제 불가능하다.", "f_score": 45, "likes": 12}
-    ]
+    return [{"topic": "비트코인", "user_view": "디지털 에너지다.", "f_score": 92, "likes": 128},
+            {"topic": "자유의지", "user_view": "화학작용일 뿐.", "f_score": 88, "likes": 95}]
 
-# AI Logic
+# AI Config
 SAFETY = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
 
-INTUITION_SYS = """당신은 '직관 유도자'입니다. 주제에 대해 '전혀 모른다'는 사용자를 위해 '밸런스 게임(이지선다)'을 만드세요. JSON: { "scenario": "...", "option_a": "...", "option_b": "...", "question": "..." }"""
-SOCRATIC_SYS = """당신은 '파인만틱 소크라테스'입니다. 질문으로 논리를 검증하세요. JSON: { "decision": "PASS"|"FAIL"|"SURRENDER", "response": "...", "reason": "..." }"""
-WHISPER_SYS = """당신은 '천사의 속삭임'입니다. 결정적인 '비유 힌트'만 짧게 던지세요."""
+INTUITION_SYS = """당신은 '직관 유도자'입니다. 밸런스 게임을 만드세요. JSON: { "scenario": "...", "option_a": "...", "option_b": "...", "question": "..." }"""
+SOCRATIC_SYS = """당신은 '파인만틱 소크라테스'입니다. 질문으로 논리를 검증하세요. JSON: { "decision": "PASS"|"FAIL", "response": "..." }"""
+WHISPER_SYS = """당신은 '천사의 속삭임'입니다. 힌트를 짧게 주세요."""
 SCORE_SYS = """당신은 '논리 심판관'입니다. 4가지 지표(0~100) 평가. JSON: { "clarity": 0, "causality": 0, "defense": 0, "originality": 0, "total_score": 0, "comment": "..." }"""
 
-def get_working_model(api_key):
-    """API 키로 사용 가능한 모델을 자동으로 찾습니다."""
+def call_gemini(api_key, sys, user, model_name='gemini-1.5-flash', json_mode=True):
     try:
         genai.configure(api_key=api_key)
-        # 우선순위: Flash -> Pro -> Standard Pro -> Latest
-        candidates = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
-        return candidates[0] # 일단 Flash 시도, 실패하면 에러 핸들링에서 처리
-    except:
-        return 'gemini-pro'
-
-def call_gemini(api_key, sys, user, json_mode=True):
-    try:
-        genai.configure(api_key=api_key)
-        # 모델 자동 선택 로직
-        model_name = 'gemini-1.5-flash' # 기본값
-        
         model = genai.GenerativeModel(model_name, system_instruction=sys, safety_settings=SAFETY, generation_config={"response_mime_type": "application/json"} if json_mode else None)
         res = model.generate_content(user)
         return json.loads(res.text) if json_mode else res.text
-    except Exception as e:
-        # 404 에러 발생 시 구형 모델로 재시도 (Fallback)
-        if "404" in str(e):
-            try:
-                model = genai.GenerativeModel('gemini-pro', safety_settings=SAFETY) # 구형 모델은 시스템 프롬프트 지원이 다를 수 있음
-                # 구형 모델 호환을 위해 프롬프트 합치기
-                full_prompt = f"{sys}\n\nUser Input: {user}"
-                res = model.generate_content(full_prompt)
-                text = res.text
-                # JSON 파싱 시도 (구형 모델은 포맷이 깨질 수 있어 보정)
-                start = text.find('{'); end = text.rfind('}') + 1
-                return json.loads(text[start:end]) if json_mode else text
-            except Exception as e2:
-                return {"decision": "FAIL", "response": f"All Models Failed. Check API Key or Region. Error: {e2}"}
-        return {"decision": "FAIL", "response": f"API Error: {e}"}
+    except Exception as e: return {"decision": "FAIL", "response": f"Error: {e}"}
 
 # ==========================================
 # [Layer 2] UI Flow
 # ==========================================
 init_db()
 
-if "signed_manifesto" not in st.session_state: st.session_state.signed_manifesto = False
 if "mode" not in st.session_state: st.session_state.mode = "HOME"
-if "messages" not in st.session_state: st.session_state.messages = []
 if "gate" not in st.session_state: st.session_state.gate = 0
+if "messages" not in st.session_state: st.session_state.messages = []
+if "working_model" not in st.session_state: st.session_state.working_model = "gemini-1.5-flash" # Default
 
 with st.sidebar:
-    st.title("⚡ FeynmanTic V11")
-    st.caption("Auto-Model Detection")
+    st.title("⚡ FeynmanTic V11.5")
+    st.caption("Connection Doctor Edition")
     api_key = st.text_input("Google API Key", type="password")
     st.markdown("[🔑 키 발급받기](https://aistudio.google.com/app/apikey)")
-    if st.button("🔄 Reset"): st.session_state.clear(); st.rerun()
+    
+    st.divider()
+    
+    # [DIAGNOSTIC BUTTON]
+    if st.button("🔧 내 모델 찾기 (연결 테스트)"):
+        if not api_key:
+            st.error("API Key를 먼저 입력하세요.")
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                with st.spinner("사용 가능한 모델을 스캔 중..."):
+                    models = genai.list_models()
+                    found_models = []
+                    for m in models:
+                        if 'generateContent' in m.supported_generation_methods:
+                            found_models.append(m.name)
+                    
+                    if found_models:
+                        st.success(f"연결 성공! 사용 가능 모델: {len(found_models)}개")
+                        # 가장 최신 모델 자동 선택
+                        if 'models/gemini-1.5-flash' in found_models:
+                            st.session_state.working_model = 'gemini-1.5-flash'
+                        elif 'models/gemini-1.5-pro' in found_models:
+                            st.session_state.working_model = 'gemini-1.5-pro'
+                        elif 'models/gemini-pro' in found_models:
+                            st.session_state.working_model = 'gemini-pro'
+                        
+                        st.info(f"✅ 자동 선택된 모델: {st.session_state.working_model}")
+                    else:
+                        st.error("사용 가능한 모델이 없습니다. 새 API Key를 발급받으세요.")
+            except Exception as e:
+                st.error(f"연결 실패. 키를 확인하세요. (공백 주의)\n에러: {e}")
 
-# --- STEP 1: MANIFESTO ---
-if not st.session_state.signed_manifesto:
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("""
-        <div style='border: 2px solid #FF4B4B; padding: 30px; border-radius: 10px; text-align: center; background: rgba(255, 75, 75, 0.05); margin-bottom: 30px;'>
-            <h2>📜 THE MANIFESTO</h2>
-            <p>나는 정답을 베끼지 않겠습니다.</p>
-            <p>나는 나의 언어로 설명하겠습니다.</p>
-            <br><p style='font-size:0.8rem; color:#888;'>서명하는 순간, 전토클럽의 회원이 됩니다.</p>
-        </div>
-    """, unsafe_allow_html=True)
-    if st.button("서명하고 입장하기 (I Agree)"):
-        st.session_state.signed_manifesto = True
-        st.rerun()
+    if st.button("🔄 Reset System"): st.session_state.clear(); st.rerun()
 
-# --- STEP 2: MAIN HUB ---
-elif st.session_state.mode == "HOME":
+# --- HOME ---
+if st.session_state.mode == "HOME":
     st.markdown("<h1 style='text-align: center;'>ARENA OF THOUGHT</h1>", unsafe_allow_html=True)
+    st.caption(f"Current Engine: {st.session_state.working_model}")
     
-    tab1, tab2, tab3 = st.tabs(["📅 News", "🏛️ Classics", "🏟️ Colosseum"])
-    
-    with tab1:
-        st.markdown("### 🔥 Daily Dismantle")
-        if st.button("📈 [Economy] 비트코인, 왜 오르는가?"): st.session_state.topic="비트코인"; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
-        if st.button("🤖 [Tech] AI가 인간을 대체할까?"): st.session_state.topic="AI 대체"; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
-        
-        st.markdown("---")
-        custom = st.text_input("Or enter your own topic:", placeholder="e.g. Quantum Physics")
-        if st.button("Start Analysis"): 
-            if custom: st.session_state.topic=custom; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
+    if st.button("🔥 Daily Dismantle: 비트코인"): 
+        if not api_key: st.error("API Key Required"); st.stop()
+        st.session_state.topic="비트코인"; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
 
-    with tab2:
-        st.markdown("### 🏛️ Eternal Questions")
-        if st.button("🦁 [Ethics] 정의란 무엇인가?"): st.session_state.topic="정의(Justice)"; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
-
-    with tab3:
-        st.markdown("### 🏟️ Spectator Mode")
-        for item in get_spectator_feed():
-            st.markdown(f"""
-                <div style='background: #161B22; border: 1px solid #30363D; padding: 15px; border-radius: 10px; margin-bottom: 15px;'>
-                    <div style='display:flex; justify-content:space-between;'>
-                        <span style='color:#FF4B4B; font-weight:bold;'>{item['topic']}</span>
-                        <span style='background: #7C4DFF; color: white; padding: 3px 8px; border-radius: 5px; font-size: 0.8rem;'>{item['f_score']}</span>
-                    </div>
-                    <p style='margin:10px 0; font-style:italic; color:#ccc;'>"{item['user_view']}"</p>
-                    <div style='font-size:0.8rem; color:#888;'>❤️ {item['likes']} Votes</div>
-                </div>
-            """, unsafe_allow_html=True)
-
-# --- STEP 3: SOCRATIC LOOP ---
+# --- CHAT ---
 elif st.session_state.mode == "CHAT":
-    if not api_key: st.error("Google API Key Required"); st.stop()
-    
     badges = "".join([f"<span class='gate-badge {'gate-active' if st.session_state.gate==i else ''}'>🔒 {i}</span>" for i in range(1,5)])
     st.markdown(f"<div style='text-align:center; margin-bottom:15px;'>{badges}</div>", unsafe_allow_html=True)
     
@@ -187,12 +147,10 @@ elif st.session_state.mode == "CHAT":
             elif st.session_state.gate == 3: instruction = "Gate 3: Falsification. Check Edge Cases."
             elif st.session_state.gate == 4: instruction = "Gate 4: Insight. Ask for User's View."
 
-            res = call_gemini(api_key, f"{SOCRATIC_SYS}\n{instruction}", f"Topic:{st.session_state.topic}\nUser:{st.session_state.messages[-1]['content']}")
+            # Use the detected model
+            res = call_gemini(api_key, f"{SOCRATIC_SYS}\n{instruction}", f"Topic:{st.session_state.topic}\nUser:{st.session_state.messages[-1]['content']}", model_name=st.session_state.working_model)
             
             full_text = res.get('response', str(res))
-            disp = ""; 
-            for char in full_text: 
-                disp += char; box.markdown(f"<div class='chat-message bot'>{disp}▌</div>", unsafe_allow_html=True); time.sleep(0.005)
             box.markdown(f"<div class='chat-message bot'>{full_text}</div>", unsafe_allow_html=True)
             st.session_state.messages.append({"role":"assistant", "content":full_text})
 
@@ -200,36 +158,4 @@ elif st.session_state.mode == "CHAT":
                 if st.session_state.gate < 4:
                     st.session_state.gate += 1; st.toast("✅ Gate Passed!"); time.sleep(1); st.rerun()
                 else:
-                    st.session_state.mode = "SCORE"
-                    st.rerun()
-
-# --- STEP 4: SCORE ---
-elif st.session_state.mode == "SCORE":
-    st.balloons()
-    st.markdown("<h1 style='text-align:center; color:#00E676;'>LOGIC AUDIT COMPLETE</h1>", unsafe_allow_html=True)
-    
-    if "score_data" not in st.session_state:
-        with st.spinner("Calculating F-Score..."):
-            dialogue = json.dumps(st.session_state.messages)
-            st.session_state.score_data = call_gemini(api_key, SCORE_SYS, f"대화내용: {dialogue}")
-            
-    score = st.session_state.score_data
-    
-    # Radar Chart
-    data = pd.DataFrame(dict(
-        r=[score.get('clarity',0), score.get('causality',0), score.get('defense',0), score.get('originality',0)],
-        theta=['Clarity', 'Causality', 'Defense', 'Originality']))
-    fig = px.line_polar(data, r='r', theta='theta', line_close=True, range_r=[0,100])
-    fig.update_traces(fill='toself', line_color='#00E676')
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown(f"""
-        <div style='text-align:center;'>
-            <h2 style='color:#00E676; font-size:3rem;'>{score.get('total_score',0)} <span style='font-size:1rem;'>/ 100</span></h2>
-            <p style='font-style:italic; color:#ccc;'>"{score.get('comment','')}"</p>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    if st.button("🏠 Return to Arena"): st.session_state.clear(); st.rerun()
+                    st.balloons(); st.success("Complete!")
