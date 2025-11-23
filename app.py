@@ -3,92 +3,109 @@ import datetime
 import time
 
 # ==========================================
-# 1. 엔진 설정 (Session State) - 데이터 저장소
+# [DATA] 세션 상태 초기화
 # ==========================================
 if 'thoughts' not in st.session_state:
-    # 초기 데이터 (예시)
-    st.session_state.thoughts = [
-        {
-            "concept": "FeynmanTic (파인만틱)",
-            "explanation": "어려운 말을 쓰지 않고 설명하는 것이 진짜 지식이다. 이 원리를 소프트웨어로 만든 생각 엔진.",
-            "date": "2025-11-23"
-        }
-    ]
+    st.session_state.thoughts = []
 
 # ==========================================
-# 2. UI 디자인 & 헤더
+# [UI] 헤더 및 설정
 # ==========================================
 st.set_page_config(page_title="FeynmanTic Engine", page_icon="🧠", layout="centered")
 
-st.title("🧠 FeynmanTic Engine")
-st.caption("Thought Operating System v1.0 (Python Edition)")
-
+st.title("🧠 FeynmanTic Engine v0.5")
+st.caption("Step 1: Simplify (Feynman) → Step 2: Falsify (Popper)")
 st.markdown("---")
 
 # ==========================================
-# 3. 입력 엔진 (The Simplifier Input)
+# [ENGINE] 입력 프로세스 (파인만 + 포퍼)
 # ==========================================
 with st.container():
-    st.subheader("⚡️ 지식 변환 엔진 가동")
+    st.subheader("⚡️ 지식 검증 프로세스")
     
-    # 입력 폼
-    with st.form(key='feynman_form'):
-        col1, col2 = st.columns([1, 2])
+    # 탭을 사용하여 단계별 사고 유도
+    tab1, tab2 = st.tabs(["Step 1. 파인만 (단순화)", "Step 2. 포퍼 (반증)"])
+
+    # 폼 시작
+    with st.form(key='engine_form'):
         
-        with col1:
-            concept_input = st.text_input(
-                "1. 무엇을 공부했나요?", 
-                placeholder="예: 양자역학, 마케팅..."
-            )
+        # [Step 1] 파인만: 개념과 쉬운 설명
+        with tab1:
+            st.markdown("#### 1. 무엇을 알게 되었나요?")
+            concept_input = st.text_input("개념 키워드", placeholder="예: 진화론")
             
-        with col2:
+            st.markdown("#### 2. 12살에게 설명한다면?")
             explanation_input = st.text_area(
-                "2. 12살 조카에게 설명한다면?",
-                placeholder="전문 용어를 빼고, 쉬운 비유를 들어서 설명해주세요.\n(설명이 너무 짧거나 어려우면 엔진이 경고를 보냅니다.)",
+                "설명 입력",
+                placeholder="전문 용어 금지. 누구나 알 수 있는 비유를 사용하세요.",
                 height=100
             )
+            st.info("💡 팁: 설명을 다 적은 후, 위쪽의 'Step 2' 탭을 눌러 검증을 진행하세요.")
 
-        # 엔진 피드백 로직 (실시간 느낌)
-        feedback_placeholder = st.empty()
-        
-        # 저장 버튼
-        submit_button = st.form_submit_button(label="지식으로 변환 (Save Insight)")
+        # [Step 2] 포퍼: 반증 시도 (핵심 기능 추가)
+        with tab2:
+            st.markdown("#### 3. 비판적 사고 (The Popper Filter)")
+            st.markdown(
+                """
+                <div style='background-color: #fff3cd; padding: 10px; border-radius: 5px; border-left: 5px solid #ffc107; color: #856404;'>
+                <b>🤖 엔진의 질문:</b> "당신의 설명이 틀릴 수 있는 상황은 언제인가요? 예외는 없나요?"
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            falsification_input = st.text_area(
+                "반례/한계점 입력",
+                placeholder="예: '이 이론은 미시세계에서는 적용되지 않는다' 혹은 '특정 조건에서는 결과가 다를 수 있다.'",
+                height=80
+            )
 
-    # 폼 제출 후 검증 로직
+        # 제출 버튼
+        st.markdown("---")
+        submit_button = st.form_submit_button(label="🚀 검증된 지식으로 저장")
+
+    # [LOGIC] 엔진 검증 로직
     if submit_button:
-        if not concept_input:
-            st.error("⚠️ 개념(키워드)이 입력되지 않았습니다.")
-        elif len(explanation_input) < 20:
-            st.warning("🤔 설명이 너무 짧습니다. 진짜 이해했다면 더 쉽게 풀어쓸 수 있습니다.")
+        # 1. 파인만 필터
+        if not concept_input or len(explanation_input) < 15:
+            st.error("⛔️ [Step 1 경고] 설명이 너무 빈약합니다. 더 쉽게 풀어서 써보세요.")
+        
+        # 2. 포퍼 필터 (새로 추가된 엔진 부품)
+        elif len(falsification_input) < 5:
+            st.warning("🤔 [Step 2 경고] 비판적 사고가 빠졌습니다. 이 지식의 '한계'나 '예외'를 탭2에서 적어주세요.")
+        
+        # 3. 통과
         else:
-            # 성공 시 저장
             new_thought = {
                 "concept": concept_input,
                 "explanation": explanation_input,
-                "date": datetime.datetime.now().strftime("%Y-%m-%d")
+                "falsification": falsification_input, # 반증 데이터 저장
+                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             }
-            st.session_state.thoughts.insert(0, new_thought) # 최신순 저장
+            st.session_state.thoughts.insert(0, new_thought)
             
-            st.success("✅ 엔진이 정상적으로 지식을 정제했습니다!")
-            time.sleep(1) # 잠시 성공 메시지 보여줌
-            st.rerun() # 화면 새로고침
+            st.success("✅ 완벽합니다! 단순화와 반증 과정을 모두 통과했습니다.")
+            time.sleep(1.5)
+            st.rerun()
 
 # ==========================================
-# 4. 대시보드 (저장된 지식 리스트)
+# [VIEW] 대시보드 (저장된 지식)
 # ==========================================
 st.markdown("---")
-st.subheader("📚 정제된 지식 보관소")
+st.subheader(f"📚 검증된 지식 ({len(st.session_state.thoughts)})")
 
-if len(st.session_state.thoughts) == 0:
-    st.info("아직 저장된 지식이 없습니다. 위 엔진을 가동해주세요.")
-else:
-    for i, item in enumerate(st.session_state.thoughts):
-        with st.expander(f"📌 {item['concept']} ({item['date']})", expanded=(i==0)):
-            st.markdown(f"**설명:**")
-            st.info(f"{item['explanation']}")
+if not st.session_state.thoughts:
+    st.write("아직 검증된 지식이 없습니다.")
+
+for i, item in enumerate(st.session_state.thoughts):
+    with st.expander(f"📌 {item['concept']} ({item['date']})", expanded=(i==0)):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.caption("✅ 정의 (Feynman)")
+            st.info(item['explanation'])
+        with col_b:
+            st.caption("🛡️ 반례/한계 (Popper)")
+            st.warning(item['falsification'])
             
-            # 삭제 버튼 (옵션)
-            if st.button("삭제", key=f"del_{i}"):
-                st.session_state.thoughts.pop(i)
-                st.rerun()
-
+        if st.button("삭제", key=f"del_{i}"):
+            st.session_state.thoughts.pop(i)
+            st.rerun()
