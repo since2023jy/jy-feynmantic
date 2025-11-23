@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 import time
 import xml.etree.ElementTree as ET
+import random
 
 # ==========================================
 # [DATABASE]
@@ -56,7 +57,7 @@ def delete_thought_from_db(thought_id):
 init_db()
 
 # ==========================================
-# [NEWS & AI]
+# [AI LOGIC]
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_google_news_kr():
@@ -66,261 +67,241 @@ def get_google_news_kr():
             xml_data = response.read()
             root = ET.fromstring(xml_data)
             news_items = []
-            for item in root.findall('.//item')[:5]:
+            for item in root.findall('.//item')[:10]: # 10개로 늘림
                 title = item.find('title').text
                 if ' - ' in title: title = title.split(' - ')[0]
                 news_items.append(title)
             return news_items
-    except: return ["뉴스 로딩 실패"]
+    except: return ["인공지능", "양자역학", "경제 위기", "기후 변화"]
 
-def call_gemini_step(api_key, concept, step_type):
-    if not api_key: return "API Key가 필요합니다."
-
-    # [FIX] 연결 가능한 모델을 찾을 때까지 순서대로 시도합니다.
-    models_to_try = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
-    
-    # 프롬프트 구성
-    if step_type == "briefing":
-        prompt = f"사용자가 '{concept}'에 대해 공부하려고 해. 이 주제의 핵심 내용, 배경, 중요한 사실 3가지를 요약해서 '브리핑'해줘. 사용자가 읽고 이해할 수 있게 명확한 한국어로 설명해."
-    elif step_type == "feynman":
-        prompt = f"개념 '{concept}'을 12살 아이에게 설명하듯 쉬운 비유를 들어 3문장으로 설명해줘. (한국어)"
-    elif step_type == "popper":
-        prompt = f"개념 '{concept}'의 한계점, 반론, 혹은 예외 상황을 날카롭게 2문장으로 지적해줘. (한국어)"
-    elif step_type == "tags":
-        prompt = f"개념 '{concept}'과 연관된 핵심 키워드 3개만 쉼표(,)로 구분해서 적어줘."
-    
+def call_gemini_brain(api_key, prompt):
+    if not api_key: return "API Key 없음"
+    models = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     encoded_data = json.dumps(data).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
-
-    last_error = ""
-
-    # 모델 순회 (Fallback Logic)
-    for model in models_to_try:
+    
+    for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         try:
             req = urllib.request.Request(url, data=encoded_data, headers=headers)
             with urllib.request.urlopen(req) as response:
                 res_json = json.loads(response.read().decode('utf-8'))
-                # 성공 시 바로 반환
                 return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                # 404면 다음 모델 시도
-                last_error = f"Model {model} not found (404). Trying next..."
-                continue 
-            else:
-                # 다른 에러(400, 403 등)는 키 문제일 확률이 높음
-                return f"연결 실패 ({e.code}): API Key 권한을 확인하세요."
-        except Exception as e:
-            return f"시스템 에러: {str(e)}"
+        except: continue
+    return "AI 연결 실패"
 
-    return f"모든 모델 연결 실패. (마지막 에러: {last_error})"
+def auto_think_process(api_key, concept):
+    """
+    관전 모드용: 한 번에 파인만-포퍼-도이치를 수행하여 결과 반환
+    """
+    # 1. 파인만 (설명)
+    expl = call_gemini_brain(api_key, f"개념 '{concept}'을 12살 아이에게 설명하듯 쉬운 비유를 들어 2문장으로 설명해줘. (한국어)")
+    # 2. 포퍼 (반증)
+    fals = call_gemini_brain(api_key, f"개념 '{concept}'의 치명적인 한계점이나 예외 상황 1가지만 짧게 지적해줘.")
+    # 3. 도이치 (태그)
+    tags = call_gemini_brain(api_key, f"개념 '{concept}' 관련 핵심 태그 2개만 쉼표로 구분해줘.")
+    
+    return expl, fals, tags
 
 # ==========================================
-# [STATE MANAGEMENT]
+# [STATE]
 # ==========================================
 if 'step' not in st.session_state: st.session_state.step = 1
-if 'w_concept' not in st.session_state: st.session_state.w_concept = ""
-if 'w_briefing' not in st.session_state: st.session_state.w_briefing = "" 
-if 'w_expl' not in st.session_state: st.session_state.w_expl = ""
-if 'w_fals' not in st.session_state: st.session_state.w_fals = ""
-if 'w_tags' not in st.session_state: st.session_state.w_tags = ""
+# 위저드 상태들...
+for key in ['w_concept', 'w_briefing', 'w_expl', 'w_fals', 'w_tags', 'exam_score', 'exam_feedback', 'broker_result']:
+    if key not in st.session_state: st.session_state[key] = ""
 
 def next_step(): st.session_state.step += 1
 def prev_step(): st.session_state.step -= 1
 def reset_wizard():
     st.session_state.step = 1
-    st.session_state.w_concept = ""
-    st.session_state.w_briefing = ""
-    st.session_state.w_expl = ""
-    st.session_state.w_fals = ""
-    st.session_state.w_tags = ""
+    for key in ['w_concept', 'w_briefing', 'w_expl', 'w_fals', 'w_tags', 'exam_score', 'exam_feedback', 'broker_result']:
+        st.session_state[key] = ""
 
 # ==========================================
-# [UI] Setup
+# [UI SETUP]
 # ==========================================
-st.set_page_config(page_title="FeynmanTic Learning", page_icon="🏫", layout="wide")
+st.set_page_config(page_title="FeynmanTic Spectator", page_icon="👁️", layout="wide")
 df = get_all_thoughts()
 
+# 사이드바
 with st.sidebar:
-    st.title("🏫 Learning Mode")
+    st.title("👁️ Control Tower")
     google_api_key = st.text_input("Google API Key", type="password", placeholder="AI Studio Key")
-    if not google_api_key:
-        st.error("AI 브리핑을 위해 키가 필수입니다.")
-        st.markdown("[👉 키 발급받기](https://aistudio.google.com/app/apikey)")
-    else:
-        st.success("시스템 준비 완료")
     
     st.markdown("---")
-    progress = (st.session_state.step - 1) / 5
-    st.progress(progress)
-    st.caption(f"Phase {st.session_state.step}/5")
-
-# ==========================================
-# [MAIN] Wizard UI
-# ==========================================
-st.title("🧠 FeynmanTic v7.2")
-
-# --- STEP 1: 주제 선정 ---
-if st.session_state.step == 1:
-    st.header("Step 1. 학습 주제 선정")
-    st.info("오늘 공부할 뉴스나 주제를 선택하세요.")
     
-    col_news, col_manual = st.columns(2)
-    with col_news:
-        st.subheader("📰 실시간 뉴스 피드")
-        news_list = get_google_news_kr()
-        for news in news_list:
-            if st.button(f"👉 {news}", key=news, use_container_width=True):
-                st.session_state.w_concept = news
-                next_step(); st.rerun()
-    with col_manual:
-        st.subheader("✍️ 직접 입력")
-        manual = st.text_input("주제", placeholder="예: 양자역학")
-        if st.button("Start ➡️", type="primary"):
-            if manual:
-                st.session_state.w_concept = manual
-                next_step(); st.rerun()
-
-# --- STEP 2: AI 브리핑 ---
-elif st.session_state.step == 2:
-    st.header(f"Step 2. '{st.session_state.w_concept}' 학습하기")
+    # [NEW] 관전 모드 토글
+    spectator_mode = st.toggle("👁️ 관전 모드 (Auto-Play)", value=False)
     
-    if not st.session_state.w_briefing:
-        if google_api_key:
-            with st.spinner(f"AI 선생님이 최적의 모델을 찾아 '{st.session_state.w_concept}' 핵심 요약을 가져옵니다..."):
-                briefing = call_gemini_step(google_api_key, st.session_state.w_concept, "briefing")
-                st.session_state.w_briefing = briefing
-                st.rerun()
-        else:
-            st.warning("API 키가 없어서 브리핑을 건너뜁니다.")
-            st.session_state.w_briefing = "API 키를 입력하면 AI 요약을 볼 수 있습니다."
-
-    st.markdown("""
-    <div style="background-color:#f0f7ff; padding:20px; border-radius:10px; border-left: 5px solid #3498db;">
-        <h4>🤖 AI Summary Note</h4>
-        <p>설명하기 전에, 이 내용을 먼저 읽고 이해해보세요.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    if spectator_mode and not google_api_key:
+        st.error("관전 모드는 AI 키가 필요합니다.")
     
-    st.markdown(f"### 📝 {st.session_state.w_concept}")
-    st.write(st.session_state.w_briefing)
     st.markdown("---")
+    st.metric("Total Insights", len(df))
+    st.caption("FeynmanTic v10.0 God Mode")
+
+# ==========================================
+# [SPECTATOR MODE LOGIC]
+# ==========================================
+if spectator_mode and google_api_key:
+    st.title("🌌 The Spectator Mode")
+    st.info("엔진이 스스로 지식을 탐식하고 확장하는 중입니다... (자동 실행 중)")
     
-    col1, col2 = st.columns([1, 3])
+    # 1. 주제 선정 (랜덤)
+    status_text = st.empty()
+    status_text.markdown("### 📡 1. 뉴스 데이터 스캔 중...")
+    
+    news_pool = get_google_news_kr()
+    target_concept = random.choice(news_pool)
+    
+    # 중복 방지 (이미 있는 건 패스하려 노력)
+    existing_concepts = df['concept'].tolist() if not df.empty else []
+    if target_concept in existing_concepts:
+        target_concept = f"{target_concept} (심화)"
+    
+    time.sleep(1)
+    status_text.markdown(f"### 🎯 2. 목표 포착: **{target_concept}**")
+    
+    # 2. AI 사고 과정 시각화
+    col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button("⬅️ 다시 선택"): prev_step(); st.rerun()
+        st.caption("🗣 Feynman (Simplicity)")
+        f_box = st.empty()
+        f_box.info("Thinking...")
     with col2:
-        if st.button("이해했습니다! 설명하러 가기 ➡️", type="primary"):
-            next_step(); st.rerun()
-
-# --- STEP 3: 파인만 (설명) ---
-elif st.session_state.step == 3:
-    st.header("Step 3. 나만의 언어로 재정의")
-    st.success("방금 읽은 내용을 바탕으로, 빈칸을 채워보세요.")
-    
-    st.markdown(f"### **{st.session_state.w_concept}**(은)는 마치...")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        analogy = st.text_input("무엇과 비슷한가요? (비유)", placeholder="예: 도서관 사서")
-    with col_b:
-        reason = st.text_input("왜냐하면...", placeholder="예: 책(정보)을 찾아서 주니까")
+        st.caption("🛡 Popper (Falsification)")
+        p_box = st.empty()
+        p_box.info("Waiting...")
+    with col3:
+        st.caption("🔗 Deutsch (Connection)")
+        d_box = st.empty()
+        d_box.info("Waiting...")
         
-    preview = f"**{st.session_state.w_concept}**은(는) 마치 **{analogy}**와(과) 같습니다. 왜냐하면 **{reason}** 때문입니다."
+    # 실제 AI 호출
+    expl, fals, tags = auto_think_process(google_api_key, target_concept)
     
-    if analogy and reason:
-        st.info(f"⬇️ 작성된 문장:\n\n{preview.replace('**','')}")
-        if st.button("입력 완료 ➡️", type="primary"):
-            st.session_state.w_expl = preview.replace("**","")
-            next_step(); st.rerun()
-            
-    with st.expander("직접 길게 쓰고 싶다면?"):
-        long_text = st.text_area("서술형 입력", value=st.session_state.w_expl)
-        if st.button("서술형으로 저장"):
-            st.session_state.w_expl = long_text
-            next_step(); st.rerun()
-
-# --- STEP 4: 포퍼 (검증) ---
-elif st.session_state.step == 4:
-    st.header("Step 4. 비판적 검증")
-    st.warning("AI 브리핑 내용이나 내 생각에서 빠진 점은 없을까요?")
+    # 결과 순차적 표시 (애니메이션 효과)
+    time.sleep(1)
+    f_box.success(expl)
+    time.sleep(1)
+    p_box.warning(fals)
+    time.sleep(1)
+    d_box.success(f"#{tags}")
     
-    q1 = st.text_input("이 이론/개념이 적용되지 않는 예외 상황은?", placeholder="예: 전기가 끊겼을 때")
+    status_text.markdown(f"### 💾 3. 지식 저장소 동기화 중...")
+    save_thought_to_db(target_concept, expl, fals, tags)
     
-    if st.button("검증 완료 ➡️", type="primary"):
-        st.session_state.w_fals = f"예외상황: {q1}" if q1 else "검증 내용 없음"
-        next_step(); st.rerun()
-        
-    if google_api_key:
-        if st.button("🤖 AI에게 반론 요청"):
-            st.session_state.w_fals = call_gemini_step(google_api_key, st.session_state.w_concept, "popper")
-            next_step(); st.rerun()
-
-# --- STEP 5: 연결 (저장) ---
-elif st.session_state.step == 5:
-    st.header("Step 5. 저장 및 연결")
-    
-    if not st.session_state.w_tags and google_api_key:
-        if st.button("✨ 태그 자동 추천"):
-            st.session_state.w_tags = call_gemini_step(google_api_key, st.session_state.w_concept, "tags")
-            st.rerun()
-            
-    tags = st.text_input("태그", value=st.session_state.w_tags)
-    
-    if st.button("🎉 지식 저장 (Finish)", type="primary"):
-        save_thought_to_db(st.session_state.w_concept, st.session_state.w_expl, st.session_state.w_fals, tags)
-        st.balloons()
-        time.sleep(1.5)
-        reset_wizard()
-        st.rerun()
+    time.sleep(2)
+    st.rerun() # 무한 루프 (새로고침)
 
 # ==========================================
-# [VISUALIZATION]
+# [MANUAL MODE] (관전 모드가 꺼져있을 때)
+# ==========================================
+elif not spectator_mode:
+    st.title("🧠 FeynmanTic v10.0")
+    
+    # Wizard UI (기존 수동 모드)
+    # --- STEP 1 ---
+    if st.session_state.step == 1:
+        st.header("Step 1. 주제 선정")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("News Feed")
+            for news in get_google_news_kr()[:4]:
+                if st.button(f"👉 {news}", key=news):
+                    st.session_state.w_concept = news
+                    next_step(); st.rerun()
+        with c2:
+            st.caption("Manual Input")
+            m = st.text_input("주제")
+            if st.button("Start"):
+                st.session_state.w_concept = m
+                next_step(); st.rerun()
+
+    # --- STEP 2 (Briefing) ---
+    elif st.session_state.step == 2:
+        st.header(f"Step 2. 학습: {st.session_state.w_concept}")
+        if not st.session_state.w_briefing and google_api_key:
+            with st.spinner("AI Briefing..."):
+                st.session_state.w_briefing = call_gemini_brain(google_api_key, f"'{st.session_state.w_concept}' 핵심 요약 3줄")
+                st.rerun()
+        st.info(st.session_state.w_briefing)
+        if st.button("Next"): next_step(); st.rerun()
+
+    # --- STEP 3 (Feynman) ---
+    elif st.session_state.step == 3:
+        st.header("Step 3. 설명")
+        c1, c2 = st.columns(2)
+        a = c1.text_input("비유 (A는 B다)", placeholder="예: API는 웨이터다")
+        r = c2.text_input("이유 (왜냐하면)", placeholder="주문을 전달하니까")
+        if a and r:
+            curr = f"**{st.session_state.w_concept}**은(는) **{a}**와 같다. 왜냐하면 **{r}** 때문이다."
+            st.write(curr.replace("**",""))
+            if st.button("AI 검사"):
+                if google_api_key:
+                    res = call_gemini_brain(google_api_key, f"설명 평가: {curr}. 점수(0-100)와 피드백 1줄 줘.")
+                    st.session_state.exam_feedback = res
+                    st.rerun()
+            if st.session_state.exam_feedback:
+                st.caption(st.session_state.exam_feedback)
+                if st.button("Pass"): st.session_state.w_expl=curr.replace("**",""); next_step(); st.rerun()
+
+    # --- STEP 4 (Popper) ---
+    elif st.session_state.step == 4:
+        st.header("Step 4. 반증")
+        q = st.text_input("예외 상황은?")
+        if st.button("Next"): st.session_state.w_fals=q; next_step(); st.rerun()
+
+    # --- STEP 5 (Save) ---
+    elif st.session_state.step == 5:
+        st.header("Step 5. 저장")
+        t = st.text_input("태그")
+        if st.button("Save"):
+            save_thought_to_db(st.session_state.w_concept, st.session_state.w_expl, st.session_state.w_fals, t)
+            st.balloons(); reset_wizard(); st.rerun()
+
+# ==========================================
+# [GRAPH VISUALIZATION] (Always Visible)
 # ==========================================
 st.markdown("---")
-with st.expander("🕸 Knowledge Graph", expanded=True):
+with st.expander("🕸 Living Knowledge Universe", expanded=True):
     if not df.empty:
-        nodes = []
-        edges = []
-        existing = set()
-        for _, row in df.iterrows():
-            c = row['concept']
-            if c not in existing:
-                nodes.append(f"{{id: '{c}', label: '{c}', group: 'concept'}}")
-                existing.add(c)
-            if row['tags']:
-                for t in row['tags'].split(','):
-                    t = t.strip()
-                    if t:
-                        if t not in existing:
-                            nodes.append(f"{{id: '{t}', label: '{t}', group: 'tag'}}")
-                            existing.add(t)
-                        edges.append(f"{{from: '{c}', to: '{t}'}}")
-        html = f"""
-        <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-        <div id="mynetwork" style="height:400px; background:white; border:1px solid #eee;"></div>
-        <script>
-          var data = {{
-            nodes: new vis.DataSet([{','.join(nodes)}]),
-            edges: new vis.DataSet([{','.join(edges)}])
-          }};
-          var options = {{
-            nodes: {{ shape: 'dot', size: 20, font: {{ size: 14 }} }},
-            groups: {{ concept: {{ color: '#3498db' }}, tag: {{ color: '#bdc3c7', shape: 'ellipse' }} }},
-            physics: {{ stabilization: false, solver: 'forceAtlas2Based' }}
-          }};
-          new vis.Network(document.getElementById('mynetwork'), data, options);
-        </script>
-        """
-        components.html(html, height=420)
-    else:
-        st.info("저장된 지식이 없습니다.")
+        nodes, edges, exist = [], [], set()
+        for _, r in df.iterrows():
+            if r['concept'] not in exist:
+                nodes.append(f"{{id:'{r['concept']}', label:'{r['concept']}', group:'concept'}}")
+                exist.add(r['concept'])
+            if r['tags']:
+                for tg in r['tags'].split(','):
+                    tg = tg.strip()
+                    if tg and tg not in exist:
+                        nodes.append(f"{{id:'{tg}', label:'{tg}', group:'tag'}}")
+                        exist.add(tg)
+                    edges.append(f"{{from:'{r['concept']}', to:'{tg}'}}")
         
-with st.expander("📂 Archive"):
-    for _, row in df.iterrows():
-        c1, c2 = st.columns([5,1])
-        c1.write(f"**{row['concept']}**")
-        if c2.button("Del", key=f"d_{row['id']}"):
-            delete_thought_from_db(row['id']); st.rerun()
+        # 그래프 높이를 좀 더 키우고, 물리 엔진 설정을 부드럽게 조정
+        html = f"""<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+        <div id="mynetwork" style="height:500px; border:1px solid #eee; background-color: #f8f9fa;"></div>
+        <script>
+        var container = document.getElementById('mynetwork');
+        var data = {{nodes: new vis.DataSet([{','.join(nodes)}]), edges: new vis.DataSet([{','.join(edges)}])}};
+        var options = {{
+            nodes: {{ shape: 'dot', size: 20, font: {{ size: 14, face: 'Helvetica' }} }},
+            groups: {{ 
+                concept: {{ color: {{ background: '#3498db', border: '#2980b9' }} }}, 
+                tag: {{ color: {{ background: '#bdc3c7', border: '#95a5a6' }}, shape: 'ellipse' }} 
+            }},
+            physics: {{ 
+                enabled: true,
+                solver: 'forceAtlas2Based',
+                forceAtlas2Based: {{ gravitationalConstant: -50, centralGravity: 0.005, springLength: 100, springConstant: 0.08 }},
+                stabilization: {{ iterations: 200 }} 
+            }},
+            layout: {{ randomSeed: 2 }}
+        }};
+        new vis.Network(container, data, options);
+        </script>"""
+        components.html(html, height=520)
+    else: st.info("데이터가 없습니다.")
