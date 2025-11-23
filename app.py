@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import datetime
 import pandas as pd
+import streamlit.components.v1 as components
 import json
 import urllib.request
 import urllib.error
@@ -14,189 +15,161 @@ from datetime import datetime as dt
 def init_db():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS thoughts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            concept TEXT NOT NULL,
-            explanation TEXT,
-            falsification TEXT,
-            tags TEXT,
-            created_at TEXT,
-            status TEXT DEFAULT 'active'
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS chat_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT,
-            content TEXT,
-            created_at TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    c.execute('''CREATE TABLE IF NOT EXISTS thoughts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, concept TEXT NOT NULL, explanation TEXT, 
+        falsification TEXT, tags TEXT, created_at TEXT, status TEXT DEFAULT 'active')''')
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, created_at TEXT)''')
+    conn.commit(); conn.close()
 
-def save_thought(concept, expl, fals, tags):
+def save_thought(c, e, f, t):
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
-    c = conn.cursor()
-    created_at = dt.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''
-        INSERT INTO thoughts (concept, explanation, falsification, tags, created_at, status)
-        VALUES (?, ?, ?, ?, ?, 'active')
-    ''', (concept, expl, fals, tags, created_at))
-    conn.commit()
-    conn.close()
+    conn.execute("INSERT INTO thoughts (concept, explanation, falsification, tags, created_at) VALUES (?,?,?,?,?)", 
+                 (c, e, f, t, dt.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit(); conn.close()
 
-def save_chat(role, content):
+def save_chat(r, c):
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute("INSERT INTO chat_logs (role, content, created_at) VALUES (?, ?, ?)", 
-              (role, content, dt.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
+    conn.execute("INSERT INTO chat_logs (role, content, created_at) VALUES (?,?,?)", 
+                 (r, c, dt.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit(); conn.close()
 
-def get_chat_history():
+def get_data():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
-    df = pd.read_sql_query("SELECT * FROM chat_logs ORDER BY id ASC", conn)
+    thoughts = pd.read_sql_query("SELECT * FROM thoughts ORDER BY id DESC", conn)
+    chats = pd.read_sql_query("SELECT * FROM chat_logs ORDER BY id ASC", conn)
     conn.close()
-    return df
-
-def get_recent_thoughts():
-    conn = sqlite3.connect('feynman.db', check_same_thread=False)
-    df = pd.read_sql_query("SELECT * FROM thoughts ORDER BY id DESC LIMIT 5", conn)
-    conn.close()
-    return df
+    return thoughts, chats
 
 init_db()
 
 # ==========================================
-# [AI AGENT] Debugged Version
+# [AI LOGIC]
 # ==========================================
-def analyze_and_archive(api_key, user_input):
-    if not api_key: return None, "사이드바에 API Key를 먼저 입력해주세요."
-    
+def analyze_input(api_key, text):
+    if not api_key: return None, "키 없음"
     prompt = f"""
-    You are an intelligent Knowledge Archivist.
-    Analyze the user's input: "{user_input}"
-    
-    If it contains knowledge worth saving, extract it into this JSON:
-    {{
-        "is_knowledge": true,
-        "concept": "Topic",
-        "explanation": "Simple explanation",
-        "falsification": "Limitation",
-        "tags": "3 keywords",
-        "reply": "Short confirmation."
-    }}
-    
-    If it's casual chat, return this JSON:
-    {{
-        "is_knowledge": false,
-        "reply": "Natural response."
-    }}
-    
-    Output ONLY the JSON string.
+    Analyze user input: "{text}"
+    If it's knowledge, extract to JSON: {{ "is_knowledge": true, "concept": "...", "explanation": "...", "falsification": "...", "tags": "...", "reply": "..." }}
+    If casual, JSON: {{ "is_knowledge": false, "reply": "..." }}
+    Output ONLY JSON.
     """
-    
-    # [FIX] 모델 리스트 최신화 (안정성 확보)
     models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.0-pro"]
-    
     data = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
     
-    last_error = ""
-    
     for model in models:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            req = urllib.request.Request(url, data=data, headers=headers)
-            
+            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}", data=data, headers=headers)
             with urllib.request.urlopen(req) as res:
-                res_text = json.loads(res.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text'].strip()
-                
-                # JSON 정제 (마크다운 제거)
-                clean_text = res_text.replace("```json", "").replace("```", "").strip()
-                
-                try:
-                    return json.loads(clean_text), None
-                except json.JSONDecodeError:
-                    last_error = f"JSON 파싱 실패 (모델 응답이 이상함): {clean_text[:50]}..."
-                    continue # 다음 모델 시도
-
-        except urllib.error.HTTPError as e:
-            last_error = f"HTTP Error {e.code}: {e.reason}"
-            continue
-        except Exception as e:
-            last_error = f"System Error: {str(e)}"
-            continue
-            
-    return None, f"AI 연결 실패 ({last_error})"
+                txt = json.loads(res.read().decode('utf-8'))['candidates'][0]['content']['parts'][0]['text']
+                clean = txt.replace("```json", "").replace("```", "").strip()
+                return json.loads(clean), None
+        except: continue
+    return None, "연결 실패"
 
 # ==========================================
-# [UI] Chat Interface
+# [UI] THE FUSION LAYOUT
 # ==========================================
-st.set_page_config(page_title="FeynmanTic Chat", page_icon="💬", layout="centered")
+st.set_page_config(page_title="FeynmanTic Ultimate", page_icon="🧠", layout="wide")
 
-# 사이드바
+# 1. Sidebar (Settings)
 with st.sidebar:
-    st.title("⚙️ 설정")
-    # [중요] 키 입력 강조
-    google_api_key = st.text_input("Google API Key", type="password", placeholder="여기에 키를 입력하세요")
-    if not google_api_key:
-        st.warning("👈 여기에 키를 넣어야 작동합니다!")
-        
-    if st.button("🗑 대화 초기화"):
+    st.title("⚙️ System Core")
+    google_api_key = st.text_input("Google API Key", type="password")
+    if st.button("Reset System"):
         conn = sqlite3.connect('feynman.db', check_same_thread=False)
-        conn.execute("DELETE FROM chat_logs")
-        conn.commit()
-        conn.close()
+        conn.execute("DELETE FROM chat_logs"); conn.execute("DELETE FROM thoughts"); conn.commit(); conn.close()
         st.rerun()
+
+st.title("🧠 FeynmanTic OS v13.0")
+st.caption("Chat Interface + Dynamic Knowledge Graph")
+
+# 데이터 로드
+thoughts_df, chats_df = get_data()
+
+# ==========================================
+# 2. TOP SECTION: VISUALIZATION (THE UNIVERSE)
+# ==========================================
+# 채팅창 위에 그래프를 배치하여 '내 뇌가 변하는 모습'을 실시간으로 보여줌
+with st.container():
+    if not thoughts_df.empty:
+        nodes, edges, exist = [], [], set()
+        for _, r in thoughts_df.iterrows():
+            c = r['concept']
+            if c not in exist:
+                nodes.append(f"{{id:'{c}', label:'{c}', group:'concept', value: 20}}")
+                exist.add(c)
+            if r['tags']:
+                for t in r['tags'].split(','):
+                    t = t.strip()
+                    if t and t not in exist:
+                        nodes.append(f"{{id:'{t}', label:'{t}', group:'tag', value: 10}}")
+                        exist.add(t)
+                    edges.append(f"{{from:'{c}', to:'{t}'}}")
         
-    st.divider()
-    st.caption("최근 지식")
-    recent = get_recent_thoughts()
-    if not recent.empty:
-        for _, row in recent.iterrows():
-            st.text(f"🔹 {row['concept']}")
+        # 그래프 렌더링 (높이 조절)
+        html = f"""
+        <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+        <div id="mynetwork" style="width: 100%; height: 350px; background-color: #f8f9fa; border-radius: 10px; border: 1px solid #ddd;"></div>
+        <script>
+        var data = {{ nodes: new vis.DataSet([{','.join(nodes)}]), edges: new vis.DataSet([{','.join(edges)}]) }};
+        var options = {{
+            nodes: {{ font: {{ face: 'Helvetica', color: '#333' }}, shape: 'dot' }},
+            groups: {{ 
+                concept: {{ color: '#3498db' }}, 
+                tag: {{ color: '#95a5a6' }} 
+            }},
+            physics: {{ 
+                stabilization: false,
+                solver: 'forceAtlas2Based',
+                forceAtlas2Based: {{ gravitationalConstant: -30, springLength: 80 }}
+            }},
+            interaction: {{ zoomView: true, dragView: true }}
+        }};
+        new vis.Network(document.getElementById('mynetwork'), data, options);
+        </script>
+        """
+        components.html(html, height=370)
+    else:
+        st.info("👆 위 공간은 당신의 '지식 우주'입니다. 아래 채팅으로 지식을 채워보세요.")
 
-# 메인
-st.title("🧠 FeynmanTic OS")
-st.caption("v12.1 Debug Edition")
+# ==========================================
+# 3. BOTTOM SECTION: CHAT INTERFACE (INPUT)
+# ==========================================
+st.divider()
 
-# 기록
-history = get_chat_history()
-for _, row in history.iterrows():
+# 채팅 기록 출력
+for _, row in chats_df.iterrows():
     with st.chat_message(row['role']):
         st.write(row['content'])
 
-# 입력
-if prompt := st.chat_input("생각을 입력하세요..."):
+# 입력 처리
+if prompt := st.chat_input("무엇을 배우셨나요? (예: 상대성 이론은 시간의 왜곡이다)"):
+    # 유저 메시지 즉시 표시
     with st.chat_message("user"):
         st.write(prompt)
     save_chat("user", prompt)
     
+    # AI 처리
     if google_api_key:
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing..."):
-                result_json, error = analyze_and_archive(google_api_key, prompt)
+            with st.spinner("지식 구조화 중..."):
+                res_json, err = analyze_input(google_api_key, prompt)
                 
-                if error:
-                    st.error(f"⚠️ {error}")
-                    save_chat("assistant", f"Error: {error}")
+                if err:
+                    st.error(err)
+                    save_chat("assistant", f"Error: {err}")
                 else:
-                    reply = result_json.get("reply", "...")
+                    reply = res_json.get("reply", "...")
                     st.write(reply)
                     save_chat("assistant", reply)
                     
-                    if result_json.get("is_knowledge"):
-                        c = result_json.get("concept")
-                        e = result_json.get("explanation")
-                        f = result_json.get("falsification")
-                        t = result_json.get("tags")
-                        save_thought(c, e, f, t)
-                        st.toast(f"💾 지식 저장 완료: {c}", icon="✅")
-                        with st.expander("저장된 카드 보기"):
-                            st.info(e)
-                            st.caption(f"반론: {f}")
+                    if res_json.get("is_knowledge"):
+                        c = res_json.get("concept")
+                        save_thought(c, res_json.get("explanation"), res_json.get("falsification"), res_json.get("tags"))
+                        st.toast(f"✨ 그래프 업데이트: {c}", icon="🕸")
+                        time.sleep(1)
+                        st.rerun() # 그래프 갱신을 위해 리로딩
     else:
-        st.error("좌측 사이드바를 열어 API Key를 입력해주세요!")
+        st.error("API Key를 입력해주세요.")
