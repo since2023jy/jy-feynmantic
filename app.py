@@ -14,14 +14,13 @@ from datetime import datetime
 # ==========================================
 # [Layer 0] Config & Design System
 # ==========================================
-st.set_page_config(page_title="FeynmanTic V25", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="FeynmanTic V25.1", page_icon="⚡", layout="centered")
 
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     .stApp { background-color: #0E1117; color: #E0E0E0; font-family: 'Pretendard', sans-serif; }
     
-    /* UI Components */
     .mode-card { background: #161B22; border: 1px solid #30363D; border-radius: 15px; padding: 25px; text-align: center; height: 180px; display: flex; flex-direction: column; justify-content: center; cursor: pointer; transition: 0.2s; }
     .mode-card:hover { border-color: #7C4DFF; background: #1F2428; transform: translateY(-5px); }
     
@@ -41,11 +40,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# [Layer 1] Robust Logic
+# [Layer 1] Logic
 # ==========================================
 def init_db():
-    # [Fix 2] 멀티스레드 허용 옵션 추가 (check_same_thread=False)
-    conn = sqlite3.connect('feynmantic_v25.db', check_same_thread=False)
+    conn = sqlite3.connect('feynmantic_v25_1.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, topic TEXT, dialogue TEXT)''')
     conn.commit()
@@ -73,7 +71,6 @@ def generate_audio(text):
         sound_file = BytesIO()
         tts = gTTS(text=text, lang='ko')
         tts.write_to_fp(sound_file)
-        # [Fix 1] 파일 커서를 맨 앞으로 되감기 (핵심!)
         sound_file.seek(0)
         return sound_file
     except: return None
@@ -88,10 +85,12 @@ def extract_json(text):
             else: return None
         except: return None
 
-# --- PROMPTS ---
+# --- [FIX] PROMPTS MOVED TO GLOBAL SCOPE ---
 SCHOOL_SYS = """[Role] 파인만틱 선생님. [Mission] 학생이 개념을 '비유'로 설명하게 유도. 정답을 주지 말고 질문할 것. 짧고 명확하게."""
 RED_TEAM_SYS = """[Role] 기업 레드팀 리더. [Mission] 보고서/기획안을 무자비하게 검증. 추상적 형용사 금지. 숫자 요구. 리스크 공격."""
 DOPPEL_SYS = """[Role] 지적 성향 분석가. [Mission] 사용자의 답변을 분석해 역사 속 위인(일론 머스크, 소크라테스, 손자 등)과 매칭하고 싱크로율을 계산."""
+WHISPER_SYS = """당신은 '천사의 속삭임'입니다. 사용자가 막힌 부분에 대해 결정적인 '비유 힌트'만 짧게 던지세요. JSON: {"response": "..."}"""
+ARTIFACT_SYS = """당신은 '지식 큐레이터'입니다. 대화 내용을 요약하세요. 특히 사용자의 통찰(View)을 강조하세요. JSON: { "title": "...", "fact_summary": ["...", "..."], "user_insight": "...", "closing_remark": "..." }"""
 
 def call_gemini(api_key, sys, user, model_name, retry_count=0):
     try:
@@ -113,7 +112,6 @@ def call_gemini(api_key, sys, user, model_name, retry_count=0):
                 return call_gemini(api_key, sys, user, model_name, retry_count + 1)
             else:
                 return {"decision": "FAIL", "response": res.text}
-            
     except Exception as e:
         return {"decision": "FAIL", "response": f"Error: {e}"}
 
@@ -131,7 +129,7 @@ if "shadow_mates" not in st.session_state: st.session_state.shadow_mates = [{"na
 
 with st.sidebar:
     st.title("⚡ FeynmanTic")
-    st.caption("V25 Final")
+    st.caption("V25.1 Patched")
     api_key = st.text_input("Google API Key", type="password")
     
     if api_key and st.button("🔄 엔진 시동 (Connect)"):
@@ -142,10 +140,8 @@ with st.sidebar:
                 st.success(f"Connected: {found}")
             else: 
                 st.error("모델 연결 실패 (키 권한 확인)")
-    
     st.divider()
-    if st.button("🏠 메인으로 (Reset)"): 
-        st.session_state.clear(); st.rerun()
+    if st.button("🏠 메인으로 (Reset)"): st.session_state.clear(); st.rerun()
 
 # --- SCENE 1: LANDING ---
 if st.session_state.mode == "LANDING":
@@ -218,7 +214,7 @@ elif st.session_state.mode == "CHAT":
         css = "user" if msg["role"] == "user" else "bot"
         st.markdown(f"<div class='chat-message {css}'>{msg['content']}</div>", unsafe_allow_html=True)
 
-    # Whisper
+    # Whisper Hint [FIXED]
     if st.session_state.messages[-1]["role"] == "assistant" and st.session_state.gate < 5:
         with st.expander("👼 Help Me"):
             if st.button("힌트 듣기"):
@@ -234,19 +230,18 @@ elif st.session_state.mode == "CHAT":
         with st.chat_message("assistant"):
             box = st.empty(); box.markdown("Thinking...")
             
-            SOCRATIC_SYS = """당신은 '파인만틱 논리 검증관'입니다. 친절하지 않습니다. 질문으로 검증하세요. JSON: { "decision": "PASS"|"FAIL", "response": "..." }"""
-            INSIGHT_SYS = """당신은 '철학적 동반자'입니다. 독창적인 관점(View)을 유도하세요."""
-            ARTIFACT_SYS = """당신은 '지식 큐레이터'입니다. 통찰을 강조하여 요약하세요. JSON: { "title": "...", "fact_summary": ["..."], "user_insight": "...", "closing_remark": "..." }"""
-            WHISPER_SYS = """당신은 '천사의 속삭임'입니다. 힌트를 주세요. JSON: {"response": "..."}"""
+            # Select System Prompt based on Role
+            if role == "SCHOOL": sys = SCHOOL_SYS
+            elif role == "PRO": sys = RED_TEAM_SYS
+            else: sys = DOPPEL_SYS
 
-            sys_prompt = SOCRATIC_SYS
             instruction = ""
             if st.session_state.gate == 1: instruction = "Gate 1: Definition. No Jargon."
             elif st.session_state.gate == 2: instruction = "Gate 2: Mechanism. Check Causality."
             elif st.session_state.gate == 3: instruction = "Gate 3: Falsification. Check Edge Cases."
-            elif st.session_state.gate == 4: sys_prompt = INSIGHT_SYS; instruction = "Gate 4: Insight."
+            elif st.session_state.gate == 4: instruction = "Gate 4: Insight."
 
-            res = call_gemini(api_key, f"{sys_prompt}\n{instruction}", f"Topic:{st.session_state.topic}\nUser:{st.session_state.messages[-1]['content']}", st.session_state.auto_model)
+            res = call_gemini(api_key, f"{sys}\n{instruction}", f"Topic:{st.session_state.topic}\nUser:{st.session_state.messages[-1]['content']}", st.session_state.auto_model)
             
             text = res.get('response', str(res))
             box.markdown(f"<div class='chat-message bot'>{text}</div>", unsafe_allow_html=True)
@@ -254,9 +249,7 @@ elif st.session_state.mode == "CHAT":
 
             if res.get('decision') == "PASS":
                 if st.session_state.gate < 4:
-                    st.session_state.gate += 1; st.toast("✅ Gate Passed!"); 
-                    time.sleep(1.5); # [Fix 3] 딜레이 추가로 UX 개선
-                    st.rerun()
+                    st.session_state.gate += 1; st.toast("✅ Gate Passed!"); time.sleep(1.5); st.rerun()
                 else:
                     st.session_state.mode = "ARTIFACT"; st.rerun()
 
@@ -270,8 +263,7 @@ elif st.session_state.mode == "ARTIFACT":
             dialogue = json.dumps(st.session_state.messages)
             data = call_gemini(api_key, ARTIFACT_SYS, f"Dialog: {dialogue}", st.session_state.auto_model)
             st.session_state.artifact = data
-            st.session_state.gate = 5
-
+            
             script = f"주제 {st.session_state.topic}. 당신의 통찰: {data.get('user_insight', '')}."
             st.session_state.audio_path = generate_audio(script)
 
