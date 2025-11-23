@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit.components.v1 as components
 import json
 import urllib.request
+import urllib.error
 import time
 import xml.etree.ElementTree as ET
 
@@ -73,11 +74,12 @@ def get_google_news_kr():
     except: return ["뉴스 로딩 실패"]
 
 def call_gemini_step(api_key, concept, step_type):
-    if not api_key: return "키 없음"
+    if not api_key: return "API Key가 필요합니다."
+
+    # [FIX] 연결 가능한 모델을 찾을 때까지 순서대로 시도합니다.
+    models_to_try = ["gemini-1.5-flash", "gemini-pro", "gemini-1.0-pro"]
     
-    # [FIX] 모델명을 가장 안정적인 'gemini-pro'로 변경 (404 에러 해결)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-    
+    # 프롬프트 구성
     if step_type == "briefing":
         prompt = f"사용자가 '{concept}'에 대해 공부하려고 해. 이 주제의 핵심 내용, 배경, 중요한 사실 3가지를 요약해서 '브리핑'해줘. 사용자가 읽고 이해할 수 있게 명확한 한국어로 설명해."
     elif step_type == "feynman":
@@ -88,14 +90,32 @@ def call_gemini_step(api_key, concept, step_type):
         prompt = f"개념 '{concept}'과 연관된 핵심 키워드 3개만 쉼표(,)로 구분해서 적어줘."
     
     data = {"contents": [{"parts": [{"text": prompt}]}]}
-    try:
-        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req) as response:
-            res_json = json.loads(response.read().decode('utf-8'))
-            return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-    except Exception as e:
-        # 에러 메시지를 더 자세히 출력
-        return f"AI 연결 오류: {str(e)} (API Key를 확인해주세요)"
+    encoded_data = json.dumps(data).encode('utf-8')
+    headers = {'Content-Type': 'application/json'}
+
+    last_error = ""
+
+    # 모델 순회 (Fallback Logic)
+    for model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            req = urllib.request.Request(url, data=encoded_data, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                res_json = json.loads(response.read().decode('utf-8'))
+                # 성공 시 바로 반환
+                return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                # 404면 다음 모델 시도
+                last_error = f"Model {model} not found (404). Trying next..."
+                continue 
+            else:
+                # 다른 에러(400, 403 등)는 키 문제일 확률이 높음
+                return f"연결 실패 ({e.code}): API Key 권한을 확인하세요."
+        except Exception as e:
+            return f"시스템 에러: {str(e)}"
+
+    return f"모든 모델 연결 실패. (마지막 에러: {last_error})"
 
 # ==========================================
 # [STATE MANAGEMENT]
@@ -129,6 +149,8 @@ with st.sidebar:
     if not google_api_key:
         st.error("AI 브리핑을 위해 키가 필수입니다.")
         st.markdown("[👉 키 발급받기](https://aistudio.google.com/app/apikey)")
+    else:
+        st.success("시스템 준비 완료")
     
     st.markdown("---")
     progress = (st.session_state.step - 1) / 5
@@ -138,7 +160,7 @@ with st.sidebar:
 # ==========================================
 # [MAIN] Wizard UI
 # ==========================================
-st.title("🧠 FeynmanTic v7.1")
+st.title("🧠 FeynmanTic v7.2")
 
 # --- STEP 1: 주제 선정 ---
 if st.session_state.step == 1:
@@ -161,13 +183,13 @@ if st.session_state.step == 1:
                 st.session_state.w_concept = manual
                 next_step(); st.rerun()
 
-# --- STEP 2: AI 브리핑 (학습 단계) ---
+# --- STEP 2: AI 브리핑 ---
 elif st.session_state.step == 2:
     st.header(f"Step 2. '{st.session_state.w_concept}' 학습하기")
     
     if not st.session_state.w_briefing:
         if google_api_key:
-            with st.spinner(f"AI 선생님이 '{st.session_state.w_concept}'에 대한 핵심 요약 노트를 만들고 있습니다..."):
+            with st.spinner(f"AI 선생님이 최적의 모델을 찾아 '{st.session_state.w_concept}' 핵심 요약을 가져옵니다..."):
                 briefing = call_gemini_step(google_api_key, st.session_state.w_concept, "briefing")
                 st.session_state.w_briefing = briefing
                 st.rerun()
@@ -184,7 +206,6 @@ elif st.session_state.step == 2:
     
     st.markdown(f"### 📝 {st.session_state.w_concept}")
     st.write(st.session_state.w_briefing)
-    
     st.markdown("---")
     
     col1, col2 = st.columns([1, 3])
