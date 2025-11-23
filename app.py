@@ -59,14 +59,15 @@ def save_log(topic, mode, messages, score_data=None):
     conn.close()
 
 def get_spectator_feed():
-    # Dummy Data for MVP
     return [
         {"topic": "비트코인", "user_view": "디지털 에너지 저장소다.", "f_score": 92, "likes": 128},
         {"topic": "자유의지", "user_view": "뇌의 화학작용일 뿐이다.", "f_score": 88, "likes": 95},
         {"topic": "AI 규제", "user_view": "핵무기급 통제가 필요하다.", "f_score": 45, "likes": 12}
     ]
 
-# AI Config (Uncensored)
+# AI Config
+# Flash 모델 에러 방지를 위해 Pro 모델로 변경
+MODEL_NAME = 'gemini-1.5-pro' 
 SAFETY = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
 
 # Prompts
@@ -78,7 +79,7 @@ SCORE_SYS = """당신은 '논리 심판관'입니다. 대화를 분석해 4가�
 def call_gemini(api_key, sys, user, json_mode=True):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=sys, safety_settings=SAFETY, generation_config={"response_mime_type": "application/json"} if json_mode else None)
+        model = genai.GenerativeModel(MODEL_NAME, system_instruction=sys, safety_settings=SAFETY, generation_config={"response_mime_type": "application/json"} if json_mode else None)
         res = model.generate_content(user)
         return json.loads(res.text) if json_mode else res.text
     except Exception as e: return {"decision": "FAIL", "response": f"API Error: {e}"}
