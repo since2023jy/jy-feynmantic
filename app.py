@@ -43,68 +43,66 @@ def get_data():
 init_db()
 
 # ==========================================
-# [AI PT LOGIC - ROBUST CONNECTION]
+# [AI PT LOGIC - COMPATIBILITY MODE]
 # ==========================================
 def run_mental_gym(api_key, history):
     if not api_key: return None, "🚫 API Key가 없습니다."
     
-    # 1. 시스템 프롬프트
-    system_instruction = {
-        "parts": [{ "text": """
-            당신은 'FeynmanTic Gym'의 악독한 AI 트레이너입니다.
-            목표: 유저가 대충 설명하면 '반려'하고, 질문을 던져서 더 구체적으로 설명하게 만드세요.
-            
-            규칙:
-            1. 유저의 설명이 짧거나 추상적이면 "구체적인 비유를 들어보세요"라며 다시 시키세요.
-            2. 유저가 '파인만 식 설명(비유)'과 '포퍼 식 반증(한계)'을 모두 말했을 때만 '합격'을 주세요.
-            3. 합격 시에는 오직 JSON만 출력하세요.
-            
-            합격 시 출력 포맷(JSON):
-            {
-                "status": "passed",
-                "concept": "개념명",
-                "explanation": "유저의 설명 요약",
-                "falsification": "유저의 반증 요약",
-                "tags": "태그3개",
-                "praise": "축하합니다! 저장되었습니다."
-            }
-        """}]
+    # 1. 트레이너 페르소나 (텍스트)
+    persona_text = """
+    [System: 당신은 'FeynmanTic Gym'의 악독한 AI 트레이너입니다.]
+    목표: 유저가 대충 설명하면 '반려'하고, 질문을 던져서 더 구체적으로 설명하게 만드세요.
+    
+    규칙:
+    1. 유저의 설명이 짧거나 추상적이면 "구체적인 비유를 들어보세요"라며 다시 시키세요.
+    2. 유저가 '파인만 식 설명(비유)'과 '포퍼 식 반증(한계)'을 모두 말했을 때만 '합격'을 주세요.
+    3. 합격 시에는 오직 JSON만 출력하세요.
+    
+    합격 시 출력 포맷(JSON):
+    {
+        "status": "passed",
+        "concept": "개념명",
+        "explanation": "유저의 설명 요약",
+        "falsification": "유저의 반증 요약",
+        "tags": "태그3개",
+        "praise": "축하합니다! 저장되었습니다."
     }
+    """
     
     # 2. 대화 내역 구성
     contents = []
-    for msg in history[-5:]: 
+    # (호환성 모드) 첫 번째 메시지에 페르소나를 강제로 주입
+    first_msg = True
+    for msg in history[-5:]:
+        text_content = msg['content']
+        if first_msg:
+            text_content = persona_text + "\n\nUser Input: " + text_content
+            first_msg = False
+            
         role = "user" if msg['role'] == "user" else "model"
         contents.append({
             "role": role,
-            "parts": [{"text": msg['content']}]
+            "parts": [{"text": text_content}]
         })
     
+    # 3. 요청 데이터 (System Instruction 제거하고 순수 대화로만 구성)
     request_data = {
-        "system_instruction": system_instruction,
         "contents": contents
     }
     
-    # [FIX] 가능한 모든 모델명 리스트 (순서대로 시도)
-    # gemini-pro는 가장 범용적이라 성공 확률이 높습니다.
-    models_to_try = [
-        "gemini-1.5-flash",
-        "gemini-pro", 
-        "gemini-1.5-pro-latest",
-        "gemini-1.0-pro"
-    ]
-    
+    # [FIX] 가장 안정적인 모델 순서
+    models = ["gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro"]
     headers = {'Content-Type': 'application/json'}
-    last_error_msg = ""
+    
+    last_error = ""
 
-    for model in models_to_try:
+    for model in models:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             req = urllib.request.Request(url, data=json.dumps(request_data).encode('utf-8'), headers=headers)
             
             with urllib.request.urlopen(req) as res:
                 response = json.loads(res.read().decode('utf-8'))
-                
                 if 'candidates' in response and response['candidates']:
                     text = response['candidates'][0]['content']['parts'][0]['text']
                     
@@ -117,28 +115,14 @@ def run_mental_gym(api_key, history):
                     else:
                         return {"status": "coaching", "text": text}, None
                 else:
-                    last_error_msg = "빈 응답"
-                    continue # 다음 모델 시도
+                    last_error = "Empty Response"
+                    continue
 
-        except urllib.error.HTTPError as e:
-            # 404면 모델이 없는 것이니 다음 모델 시도 (continue)
-            if e.code == 404:
-                last_error_msg = f"{model} 모델 없음(404), 다음 시도..."
-                continue
-            elif e.code == 400:
-                # 400 에러는 요청 형식이 안맞는 경우일 수 있음. gemini-pro로 넘어가서 시도
-                last_error_msg = f"{model} 요청 오류(400), 다음 시도..."
-                continue
-            elif e.code == 401:
-                return None, "🚫 API Key가 틀렸습니다. (401 Unauthorized)"
-            else:
-                last_error_msg = f"HTTP Error {e.code}"
-                continue
         except Exception as e:
-            last_error_msg = str(e)
+            last_error = str(e)
             continue
             
-    return None, f"모든 AI 모델 연결 실패. (마지막 에러: {last_error_msg})"
+    return None, f"연결 실패: {last_error} (키를 다시 확인해주세요)"
 
 # ==========================================
 # [UI] GYM INTERFACE
@@ -147,11 +131,9 @@ st.set_page_config(page_title="FeynmanTic Gym", page_icon="🏋️", layout="wid
 
 with st.sidebar:
     st.title("🏋️ FeynmanTic Gym")
-    st.caption("No Pain, No Brain.")
     google_api_key = st.text_input("Gym Pass (API Key)", type="password")
-    
     st.markdown("---")
-    if st.button("🧹 라커룸 청소 (대화 초기화)"):
+    if st.button("🧹 대화 초기화"):
         conn = sqlite3.connect('feynman.db', check_same_thread=False)
         conn.execute("DELETE FROM chat_logs")
         conn.commit(); conn.close()
@@ -210,7 +192,7 @@ with col_chat:
         if google_api_key:
             with st.chat_message("assistant", avatar="🏋️"):
                 message_placeholder = st.empty()
-                message_placeholder.markdown("🔥 자세 분석 중...")
+                message_placeholder.markdown("🔥 분석 중...")
                 
                 history_data = []
                 for _, r in chats_df.tail(5).iterrows():
