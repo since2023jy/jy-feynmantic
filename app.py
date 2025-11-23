@@ -1,11 +1,11 @@
 import streamlit as st
 import sqlite3
 import datetime
-import time
 import pandas as pd
+import streamlit.components.v1 as components
 
 # ==========================================
-# [DATABASE] 뇌관 (Logic Core)
+# [DATABASE]
 # ==========================================
 def init_db():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
@@ -48,139 +48,144 @@ def delete_thought_from_db(thought_id):
     conn.commit()
     conn.close()
 
-def calculate_streak(df):
-    if df.empty: return 0
-    df['date'] = pd.to_datetime(df['created_at']).dt.date
-    unique_dates = sorted(df['date'].unique(), reverse=True)
-    if not unique_dates: return 0
-    today = datetime.date.today()
-    streak = 0
-    if unique_dates[0] == today:
-        streak = 1
-        check_date = today - datetime.timedelta(days=1)
-        idx = 1
-    else:
-        if unique_dates[0] == today - datetime.timedelta(days=1):
-            check_date = today - datetime.timedelta(days=1)
-            idx = 0
-        else: return 0
-    while idx < len(unique_dates):
-        if unique_dates[idx] == check_date:
-            streak += 1
-            check_date -= datetime.timedelta(days=1)
-            idx += 1
-        else: break
-    return streak
-
 init_db()
 
 # ==========================================
-# [UI] Dashboard
+# [UI] Setup
 # ==========================================
 st.set_page_config(page_title="FeynmanTic OS", page_icon="🧠", layout="wide")
-
 df = get_all_thoughts()
-streak_count = calculate_streak(df)
 total_thoughts = len(df)
-today_count = len(df[pd.to_datetime(df['created_at']).dt.date == datetime.date.today()]) if not df.empty else 0
 
-with st.sidebar:
-    st.title("FeynmanTic")
-    st.metric(label="🔥 Streak", value=f"{streak_count} Days")
-    st.metric(label="Total Nodes", value=f"{total_thoughts}")
-    st.markdown("---")
-    st.info("Input -> Process -> Network")
-
-st.title("🧠 FeynmanTic OS v1.9")
-st.caption("No-Install Edition: Knowledge Graph Active")
-
-col1, col2 = st.columns([2, 1])
-with col1:
-    st.markdown(f"### ⚡️ Today's Output: **{today_count}** Insights")
-with col2:
-    if not df.empty and 'falsification' in df.columns:
-        valid_fals = df['falsification'].apply(lambda x: len(str(x)) > 5).sum()
-        ratio = int((valid_fals / total_thoughts) * 100)
-    else: ratio = 0
-    st.markdown(f"### 🛡 Critical Rate: **{ratio}%**")
-
-st.markdown("---")
+st.title("🧠 FeynmanTic OS v2.0")
+st.caption("Update: Interactive Physics Graph (Vis.js Implementation)")
 
 # ==========================================
-# [VISUALIZATION] Native Graph (DOT String)
+# [INTERACTIVE GRAPH] 핵심 업그레이드
 # ==========================================
-if not df.empty:
-    with st.expander("🕸 지식 네트워크 지도 (Knowledge Graph)", expanded=True):
-        
-        # 1. DOT 언어로 그래프 정의 시작
-        dot_source = """
-        digraph {
-            rankdir="LR";
-            bgcolor="transparent";
-            node [shape="box", style="filled", fillcolor="#f0f2f6", fontname="Helvetica"];
-            edge [color="#bdc3c7"];
-        """
-        
-        # 2. 데이터를 순회하며 노드와 엣지(연결선) 텍스트 생성
-        for index, row in df.iterrows():
-            concept = row['concept'].replace('"', "'") # 에러 방지용 따옴표 처리
-            
-            # 개념 노드 (파란색)
-            dot_source += f'    "{concept}" [style="filled", fillcolor="#d4e6f1", color="#3498db", penwidth="2"];\n'
-            
-            # 태그 연결
-            if row['tags']:
-                tags = [t.strip() for t in row['tags'].split(',')]
-                for tag in tags:
-                    if tag:
-                        tag_clean = tag.replace('"', "'")
-                        # 태그 노드 (타원형) 및 연결
-                        dot_source += f'    "{tag_clean}" [shape="ellipse", style="filled", fillcolor="#eaecee", color="#95a5a6"];\n'
-                        dot_source += f'    "{concept}" -> "{tag_clean}";\n'
+st.subheader("🕸 Living Knowledge Network")
 
-        # 3. 그래프 닫기
-        dot_source += "}"
-        
-        # 4. Streamlit 내장 함수로 렌더링 (라이브러리 불필요)
-        st.graphviz_chart(dot_source, use_container_width=True)
-        st.caption("💡 개념(Blue)과 태그(Grey)가 어떻게 연결되는지 보여줍니다.")
-
-# ==========================================
-# [ENGINE] Input Form
-# ==========================================
-with st.container():
-    st.subheader("🚀 Engine Input")
-    tab1, tab2, tab3 = st.tabs(["1. Feynman", "2. Popper", "3. Deutsch"])
+if df.empty:
+    st.info("데이터가 없습니다. 아래 엔진을 가동하여 지식을 주입하세요.")
+else:
+    # 1. 그래프 데이터 구성 (Nodes & Edges)
+    nodes = []
+    edges = []
     
-    with st.form(key='engine_form', clear_on_submit=True):
-        with tab1:
-            c_in = st.text_input("Concept", placeholder="핵심 개념")
-            e_in = st.text_area("Redefinition", placeholder="쉬운 설명", height=80)
-        with tab2:
-            f_in = st.text_area("Falsification", placeholder="반증/한계", height=80)
-        with tab3:
-            t_in = st.text_input("Tags", placeholder="연결 고리 (콤마 구분)")
+    existing_nodes = set()
+    
+    for index, row in df.iterrows():
+        concept = row['concept']
+        # 개념 노드 (파란색)
+        if concept not in existing_nodes:
+            nodes.append(f"{{id: '{concept}', label: '{concept}', group: 'concept'}}")
+            existing_nodes.add(concept)
             
-        if st.form_submit_button("Save to Grid"):
-            if not c_in: st.error("개념을 입력하세요.")
-            else:
-                save_thought_to_db(c_in, e_in, f_in, t_in)
-                st.success("Network Updated.")
-                time.sleep(0.5)
-                st.rerun()
+        if row['tags']:
+            tags = [t.strip() for t in row['tags'].split(',')]
+            for tag in tags:
+                if tag:
+                    # 태그 노드 (회색)
+                    if tag not in existing_nodes:
+                        nodes.append(f"{{id: '{tag}', label: '{tag}', group: 'tag'}}")
+                        existing_nodes.add(tag)
+                    # 엣지 연결
+                    edges.append(f"{{from: '{concept}', to: '{tag}'}}")
+
+    # 2. HTML/JS 템플릿 생성 (Vis.js 라이브러리 CDN 사용)
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+      <style type="text/css">
+        #mynetwork {{
+          width: 100%;
+          height: 500px;
+          border: 1px solid #lightgray;
+          background-color: #ffffff;
+        }}
+      </style>
+    </head>
+    <body>
+    <div id="mynetwork"></div>
+    <script type="text/javascript">
+      // 데이터 주입
+      var nodes = new vis.DataSet([{','.join(nodes)}]);
+      var edges = new vis.DataSet([{','.join(edges)}]);
+
+      var container = document.getElementById('mynetwork');
+      var data = {{
+        nodes: nodes,
+        edges: edges
+      }};
+      
+      var options = {{
+        nodes: {{
+          shape: 'dot',
+          size: 20,
+          font: {{ size: 16 }}
+        }},
+        groups: {{
+          concept: {{ color: {{ background: '#3498db', border: '#2980b9' }}, font: {{ color: 'black' }} }},
+          tag: {{ color: {{ background: '#ecf0f1', border: '#bdc3c7' }}, shape: 'ellipse', font: {{ size: 12, color: '#7f8c8d' }} }}
+        }},
+        physics: {{
+          enabled: true,
+          stabilization: false,
+          solver: 'forceAtlas2Based', // 물리 엔진 알고리즘
+          forceAtlas2Based: {{
+            gravitationalConstant: -50,
+            centralGravity: 0.005,
+            springLength: 100,
+            springConstant: 0.08
+          }}
+        }},
+        interaction: {{ hover: true, zoomView: true, dragView: true }}
+      }};
+      
+      var network = new vis.Network(container, data, options);
+    </script>
+    </body>
+    </html>
+    """
+    
+    # 3. 렌더링 (iframe으로 삽입)
+    components.html(html_code, height=520)
 
 # ==========================================
-# [ARCHIVE] List View
+# [ENGINE] Input
 # ==========================================
 st.markdown("---")
-with st.expander("📂 Raw Data Archive"):
+st.subheader("🚀 Engine Input")
+tab1, tab2, tab3 = st.tabs(["1. Feynman", "2. Popper", "3. Deutsch"])
+
+with st.form(key='engine_form', clear_on_submit=True):
+    with tab1:
+        c_in = st.text_input("Concept", placeholder="핵심 개념")
+        e_in = st.text_area("Redefinition", placeholder="쉬운 설명", height=80)
+    with tab2:
+        f_in = st.text_area("Falsification", placeholder="반증/한계", height=80)
+    with tab3:
+        t_in = st.text_input("Tags", placeholder="연결 고리 (콤마로 구분)")
+        
+    if st.form_submit_button("Inject to Network"):
+        if not c_in: st.error("개념을 입력하세요.")
+        else:
+            save_thought_to_db(c_in, e_in, f_in, t_in)
+            st.success("지식이 네트워크에 통합되었습니다.")
+            st.rerun()
+
+# ==========================================
+# [ARCHIVE] List
+# ==========================================
+with st.expander("📂 Data List View"):
     if not df.empty:
         for index, row in df.iterrows():
-            col_a, col_b = st.columns([5, 1])
-            with col_a:
-                st.markdown(f"**{row['concept']}** ({row['created_at']})")
-                st.caption(f"{row['explanation'][:50]}... | Tags: {row['tags']}")
-            with col_b:
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                st.markdown(f"**{row['concept']}** : {row['explanation']}")
+            with col2:
                 if st.button("Del", key=f"del_{row['id']}"):
                     delete_thought_from_db(row['id'])
                     st.rerun()
