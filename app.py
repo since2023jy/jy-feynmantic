@@ -12,49 +12,66 @@ import re
 from datetime import datetime
 
 # ==========================================
-# [Layer 0] Config & Style
+# [Layer 0] Config & Design System
 # ==========================================
-st.set_page_config(page_title="FeynmanTic V26", page_icon="🧠", layout="wide") # 레이아웃 wide로 변경
+st.set_page_config(page_title="FeynmanTic V25.3", page_icon="⚡", layout="centered")
 
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     .stApp { background-color: #0E1117; color: #E0E0E0; font-family: 'Pretendard', sans-serif; }
     
-    /* UI Components */
-    .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; line-height: 1.6; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .mode-card { background: #161B22; border: 1px solid #30363D; border-radius: 15px; padding: 25px; text-align: center; height: 180px; display: flex; flex-direction: column; justify-content: center; cursor: pointer; transition: 0.2s; }
+    .mode-card:hover { border-color: #7C4DFF; background: #1F2428; transform: translateY(-5px); }
+    
+    .chat-message { padding: 1.2rem; border-radius: 1rem; margin-bottom: 1rem; line-height: 1.6; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .chat-message.user { background-color: #21262D; border-right: 4px solid #7C4DFF; text-align: right; margin-left: 15%; }
-    .chat-message.bot { background-color: #161B22; border-left: 4px solid #00E676; font-family: 'Courier New', monospace; margin-right: 5%; }
-    .chat-message.system { background-color: #2D0A0A; color: #FF4B4B; border: 1px dashed #FF4B4B; text-align: center; font-size: 0.9rem; }
+    .chat-message.bot { background-color: #161B22; border-left: 4px solid #00E676; margin-right: 10%; }
+    .chat-message.whisper { background-color: #0d1117; border: 1px dashed #4285F4; color: #8ab4f8; font-size: 0.9rem; text-align: center; padding: 10px; margin: 10px 0; }
+
+    .gate-badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 20px; background: #30363D; color: #aaa; margin-right: 4px; border: 1px solid #444; }
+    .gate-active { background: rgba(0, 230, 118, 0.1); color: #00E676; border-color: #00E676; font-weight: bold; }
     
-    .stat-box { background: #161B22; border: 1px solid #30363D; border-radius: 10px; padding: 15px; margin-bottom: 10px; }
-    .stat-delta { color: #00E676; font-weight: bold; font-size: 0.8rem; float: right; }
-    .stat-minus { color: #FF4B4B; font-weight: bold; font-size: 0.8rem; float: right; }
+    .artifact-box { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 2px solid #FFD700; border-radius: 15px; padding: 25px; text-align: center; margin-top: 20px; }
     
-    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
-    .stTextInput input { background-color: #0d1117 !important; color: #fff !important; }
+    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; }
+    .stTextInput input { background-color: #0d1117 !important; color: #fff !important; border: 1px solid #30363d !important; }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# [Layer 1] Logic & Stats
+# [Layer 1] Logic
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('feynmantic_v26.db', check_same_thread=False)
+    conn = sqlite3.connect('feynmantic_v25_3.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, topic TEXT, dialogue TEXT, final_stats TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, level TEXT, topic TEXT, dialogue TEXT)''')
     conn.commit()
     conn.close()
 
 def find_working_model(api_key):
     try:
         genai.configure(api_key=api_key)
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        available = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available.append(m.name)
         priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
         for p in priority:
             for a in available:
                 if p in a: return a
-        return available[0] if available else None
+        for a in available:
+            if 'gemini' in a: return a
+        return None
+    except: return None
+
+def generate_audio(text):
+    try:
+        sound_file = BytesIO()
+        tts = gTTS(text=text, lang='ko')
+        tts.write_to_fp(sound_file)
+        sound_file.seek(0)
+        return sound_file
     except: return None
 
 def extract_json(text):
@@ -67,204 +84,223 @@ def extract_json(text):
             else: return None
         except: return None
 
-# --- NEW: Scoring Prompts ---
-# AI가 답변만 보는 게 아니라 '점수 변화량'을 계산해서 줌
-SCORING_INSTRUCTION = """
-[평가 기준]
-1. 이해력(und): 개념 정의가 명확한가?
-2. 설명력(exp): 비유가 적절한가?
-3. 창의력(cre): 독창적인 관점인가?
-4. 융합력(syn): 다른 개념과 연결했는가?
-5. 애티튜드(att): 논리적인 태도인가? (공격적이지 않고 차분한가)
+# --- DYNAMIC PROMPTS (학교별 분기) ---
+def get_school_prompt(level):
+    if level == "ELEM": # 초등
+        return """[Role] 친절한 몬스터 헌터 선생님. [Mission] 어려운 말 금지. '피자', '장난감' 같은 쉬운 비유로 설명하게 유도. 칭찬 많이."""
+    elif level == "MIDDLE": # 중등
+        return """[Role] 개념 검증관. [Mission] 교과서 핵심 키워드가 들어갔는지 확인. 80점 이상이면 통과."""
+    elif level == "HIGH": # 고등
+        return """[Role] 수능 출제위원. [Mission] '왜?'를 집요하게 물어 논리적 허점(함정)을 파고들 것. 냉철하게 평가."""
+    return """[Role] 파인만틱 선생님."""
 
-[Output Format]
-JSON: {
-    "decision": "PASS"|"FAIL",
-    "response": "피드백 멘트",
-    "score_delta": { "und": 0~10, "exp": 0~10, "cre": 0~10, "syn": 0~10, "att": -5~5 }
-}
-"""
+RED_TEAM_SYS = """[Role] 기업 레드팀 리더. [Mission] 보고서/기획안을 무자비하게 검증. 추상적 형용사 금지. 숫자 요구. 리스크 공격."""
+DOPPEL_SYS = """[Role] 지적 성향 분석가. [Mission] 사용자의 답변을 분석해 역사 속 위인(일론 머스크, 소크라테스, 손자 등)과 매칭하고 싱크로율을 계산."""
+WHISPER_SYS = """당신은 '천사의 속삭임'입니다. 사용자가 막힌 부분에 대해 결정적인 '비유 힌트'만 짧게 던지세요. JSON: {"response": "..."}"""
+ARTIFACT_SYS = """당신은 '지식 큐레이터'입니다. 대화 내용을 요약하세요. 특히 사용자의 통찰(View)을 강조하세요. JSON: { "title": "...", "fact_summary": ["...", "..."], "user_insight": "...", "closing_remark": "..." }"""
 
-SCHOOL_SYS = f"""[Role] 파인만틱 선생님. [Mission] 학생이 개념을 '비유'로 설명하게 유도. {SCORING_INSTRUCTION}"""
-RED_TEAM_SYS = f"""[Role] 기업 레드팀 리더. [Mission] 보고서를 무자비하게 검증. 숫자/논리 집착. {SCORING_INSTRUCTION}"""
-DOPPEL_SYS = f"""[Role] 지적 성향 분석가. [Mission] 위인 매칭 및 사고력 평가. {SCORING_INSTRUCTION}"""
-
-def call_gemini(api_key, sys, user, model_name):
+def call_gemini(api_key, sys, user, model_name, retry_count=0):
     try:
         genai.configure(api_key=api_key)
         config = {"response_mime_type": "application/json"} if "1.5" in model_name else {}
         safety = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
         
         model = genai.GenerativeModel(model_name, system_instruction=sys, safety_settings=safety, generation_config=config)
-        # 현재 스탯 정보도 같이 줌 (AI가 참고하라고)
-        final_prompt = f"{user}\n\n(JSON format only)"
+        final_prompt = f"{user}\n\n(Respond ONLY in JSON with key 'response')" if "1.5" not in model_name else user
         
         res = model.generate_content(final_prompt)
-        return extract_json(res.text)
+        parsed = extract_json(res.text)
+        
+        if parsed: return parsed
+        else:
+            if retry_count < 1:
+                time.sleep(1)
+                return call_gemini(api_key, sys, user, model_name, retry_count + 1)
+            else:
+                return {"decision": "FAIL", "response": res.text}
     except Exception as e:
-        return {"decision": "FAIL", "response": f"Error: {e}", "score_delta": {}}
+        return {"decision": "FAIL", "response": f"Error: {e}"}
 
 # ==========================================
-# [Layer 2] State Management
+# [Layer 2] UI Flow
 # ==========================================
 init_db()
 if "mode" not in st.session_state: st.session_state.mode = "LANDING"
-if "stats" not in st.session_state: 
-    # 초기 스탯 (Attitude는 100점 만점 시작, 나머지는 0점부터 빌드업)
-    st.session_state.stats = {"und": 10, "exp": 10, "cre": 10, "syn": 10, "att": 100}
-if "messages" not in st.session_state: st.session_state.messages = []
+if "user_role" not in st.session_state: st.session_state.user_role = None
+if "school_level" not in st.session_state: st.session_state.school_level = None # New: 학교 레벨
 if "gate" not in st.session_state: st.session_state.gate = 0
+if "messages" not in st.session_state: st.session_state.messages = []
 if "auto_model" not in st.session_state: st.session_state.auto_model = None
+if "artifact" not in st.session_state: st.session_state.artifact = None
 
-# ==========================================
-# [Layer 3] UI Flow
-# ==========================================
 with st.sidebar:
-    st.title("⚡ FeynmanTic V26")
-    st.caption("The Pentagonal Stat System")
-    
-    if st.session_state.mode == "CHAT":
-        st.markdown("### 🧠 My Brain Stats")
-        
-        # Radar Chart
-        labels = {"und":"이해력", "exp":"설명력", "cre":"창의력", "syn":"융합력", "att":"애티튜드"}
-        data = pd.DataFrame(dict(
-            r=list(st.session_state.stats.values()),
-            theta=[labels[k] for k in st.session_state.stats.keys()]
-        ))
-        fig = px.line_polar(data, r='r', theta='theta', line_close=True, range_r=[0, 100])
-        fig.update_traces(fill='toself', line_color='#7C4DFF')
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", 
-            plot_bgcolor="rgba(0,0,0,0)", 
-            font_color="white",
-            margin=dict(t=20, b=20, l=30, r=30),
-            height=250
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Stat Detail
-        for k, v in st.session_state.stats.items():
-            color = "#FF4B4B" if k == 'att' and v < 80 else "#00E676"
-            st.markdown(f"**{labels[k]}**: <span style='color:{color}'>{v}</span>", unsafe_allow_html=True)
-
+    st.title("⚡ FeynmanTic")
+    st.caption("V25.3 School Patch")
     api_key = st.text_input("Google API Key", type="password")
-    if api_key and st.button("🔄 Connect"):
-        found = find_working_model(api_key)
-        if found: st.session_state.auto_model = found; st.success("Connected")
     
-    if st.button("Reset"): st.session_state.clear(); st.rerun()
+    if api_key and st.button("🔄 엔진 시동 (Connect)"):
+        with st.spinner("시스템 점검 중..."):
+            found = find_working_model(api_key)
+            if found: 
+                st.session_state.auto_model = found
+                st.success(f"Connected: {found}")
+            else: 
+                st.error("모델 연결 실패 (키 권한 확인)")
+    st.divider()
+    if st.button("🏠 메인으로 (Reset)"): st.session_state.clear(); st.rerun()
 
 # --- SCENE 1: LANDING ---
 if st.session_state.mode == "LANDING":
-    st.markdown("<br><h1 style='text-align: center;'>CHOOSE UNIVERSE</h1><br>", unsafe_allow_html=True)
+    st.markdown("<br><h1 style='text-align: center;'>CHOOSE YOUR UNIVERSE</h1><br>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
-    if c1.button("🎒 SCHOOL"): st.session_state.user_role="SCHOOL"; st.session_state.mode="CHAT_INIT"; st.rerun()
-    if c2.button("🛡️ RED TEAM"): st.session_state.user_role="PRO"; st.session_state.mode="CHAT_INIT"; st.rerun()
-    if c3.button("🌌 EXPLORER"): st.session_state.user_role="EXPLORER"; st.session_state.mode="CHAT_INIT"; st.rerun()
+    with c1:
+        st.markdown("""<div class="mode-card"><h1>🎒</h1><h3>SCHOOL</h3><p style='color:#888; font-size:0.8rem;'>초중고 개념 정복</p></div>""", unsafe_allow_html=True)
+        if st.button("학생 입장"): st.session_state.user_role = "SCHOOL"; st.session_state.mode = "SCHOOL_SELECT"; st.rerun()
+    with c2:
+        st.markdown("""<div class="mode-card"><h1>🛡️</h1><h3>RED TEAM</h3><p style='color:#888; font-size:0.8rem;'>직장인 보고서 검증</p></div>""", unsafe_allow_html=True)
+        if st.button("직장인 입장"): st.session_state.user_role = "PRO"; st.session_state.mode = "PRO_HOME"; st.rerun()
+    with c3:
+        st.markdown("""<div class="mode-card"><h1>🌌</h1><h3>EXPLORER</h3><p style='color:#888; font-size:0.8rem;'>지적 도플갱어 찾기</p></div>""", unsafe_allow_html=True)
+        if st.button("탐험가 입장"): st.session_state.user_role = "EXPLORER"; st.session_state.mode = "EXPLORER_HOME"; st.rerun()
 
-# --- SCENE 2: INIT CHAT ---
-elif st.session_state.mode == "CHAT_INIT":
-    topic = st.text_input("주제 입력 (Topic)", placeholder="예: 비트코인, 미분, 마케팅...")
-    if st.button("START"):
-        st.session_state.topic = topic
-        st.session_state.mode = "CHAT"
-        st.session_state.gate = 1
-        intro = f"**'{topic}'** 해체를 시작합니다. \n\n먼저 이것의 **'정의(Definition)'**를 내려보세요."
-        st.session_state.messages = [{"role":"assistant", "content":intro}]
+# --- SCENE 2-A: SCHOOL LEVEL SELECT (NEW) ---
+elif st.session_state.mode == "SCHOOL_SELECT":
+    st.markdown("<h2 style='text-align: center;'>학년을 선택하세요</h2>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown("""<div style='text-align:center; padding:20px; background:#1F2428; border-radius:10px; border:1px solid #333;'><h3>🐣 초등</h3><p>몬스터 잡기</p></div>""", unsafe_allow_html=True)
+        if st.button("초등 입장"): st.session_state.school_level="ELEM"; st.session_state.mode="SCHOOL_HOME"; st.rerun()
+    with c2:
+        st.markdown("""<div style='text-align:center; padding:20px; background:#1F2428; border-radius:10px; border:1px solid #333;'><h3>🏫 중등</h3><p>개념 80점 도전</p></div>""", unsafe_allow_html=True)
+        if st.button("중등 입장"): st.session_state.school_level="MIDDLE"; st.session_state.mode="SCHOOL_HOME"; st.rerun()
+    with c3:
+        st.markdown("""<div style='text-align:center; padding:20px; background:#1F2428; border-radius:10px; border:1px solid #333;'><h3>🎓 고등</h3><p>수능 킬러 저격</p></div>""", unsafe_allow_html=True)
+        if st.button("고등 입장"): st.session_state.school_level="HIGH"; st.session_state.mode="SCHOOL_HOME"; st.rerun()
+
+# --- SCENE 2-B: SCHOOL HOME ---
+elif st.session_state.mode == "SCHOOL_HOME":
+    lv = st.session_state.school_level
+    title = "🐣 초등 몬스터" if lv=="ELEM" else "🏫 중등 필수개념" if lv=="MIDDLE" else "🎓 수능 킬러주제"
+    quests = {
+        "ELEM": ["분수 몬스터", "도형의 이동", "시간과 시각"],
+        "MIDDLE": ["피타고라스 정리", "광합성", "기회비용"],
+        "HIGH": ["미분가능성", "상대성이론", "빈칸추론"]
+    }
+    
+    st.markdown(f"## {title}")
+    for q in quests[lv]:
+        if st.button(f"도전: {q}"):
+            if not st.session_state.auto_model: st.error("키 연결 필요"); st.stop()
+            st.session_state.topic=q; st.session_state.mode="CHAT"; st.session_state.gate=1
+            
+            # 첫 인사말도 레벨별로 다르게
+            intro = ""
+            if lv == "ELEM": intro = f"안녕! **'{q}'** 잡으러 왔구나! 책 말고 네 생각대로 쉽게 설명해볼래?"
+            elif lv == "MIDDLE": intro = f"**'{q}'** 개념 인증 시작합니다. 핵심 키워드를 포함해서 설명하세요."
+            else: intro = f"**'{q}'** 출제 의도 파악 시작. 단순히 외운 거 말고, 논리적 구조를 브리핑해."
+            
+            st.session_state.messages=[{"role":"assistant", "content":intro}]
+            st.rerun()
+
+# --- SCENE 2-C: PRO & EXPLORER HOME ---
+elif st.session_state.mode == "PRO_HOME":
+    st.markdown("## 🛡️ 레드팀 작전실")
+    if st.button("검증: 마케팅 기획안"):
+        if not st.session_state.auto_model: st.error("키 필요"); st.stop()
+        st.session_state.topic="마케팅"; st.session_state.mode="CHAT"; st.session_state.gate=1
+        st.session_state.messages=[{"role":"assistant", "content":"기획안의 핵심 논리를 한 문장으로 요약하십시오. 수치 포함 필수."}]
         st.rerun()
 
-# --- SCENE 3: THE ARENA (Main Chat) ---
+elif st.session_state.mode == "EXPLORER_HOME":
+    st.markdown("## 🌌 지식 탐험")
+    if st.button("해체: 비트코인"):
+        if not st.session_state.auto_model: st.error("키 필요"); st.stop()
+        st.session_state.topic="비트코인"; st.session_state.mode="CHAT"; st.session_state.gate=1
+        st.session_state.messages=[{"role":"assistant", "content":"비트코인을 한 줄로 정의한다면 무엇입니까?"}]
+        st.rerun()
+
+# --- SCENE 3: CHAT ---
 elif st.session_state.mode == "CHAT":
-    # Main Layout (Chat vs Stats handled by Sidebar)
-    
-    # Gate Progress
-    cols = st.columns(4)
-    gates = ["Def", "Mech", "Fals", "View"]
-    for i, g in enumerate(gates):
-        active = "border: 2px solid #00E676; color: #00E676;" if st.session_state.gate == i+1 else "border: 1px solid #333; color: #555;"
-        cols[i].markdown(f"<div style='text-align:center; border-radius:5px; padding:5px; {active} font-size:0.8rem;'>{g}</div>", unsafe_allow_html=True)
+    role = st.session_state.user_role
+    st.markdown(f"<div style='text-align:center; margin-bottom:20px; color:#888;'>Topic: {st.session_state.topic} (Gate {st.session_state.gate})</div>", unsafe_allow_html=True)
 
-    st.markdown("---")
-
-    # Chat Log
     for msg in st.session_state.messages:
-        css = "user" if msg["role"] == "user" else "bot" if msg["role"] == "assistant" else "whisper"
-        st.markdown(f"<div class='chat-message {css}'>{msg['content']}</div>", unsafe_allow_html=True)
+        css = "user" if msg["role"] == "user" else "bot"
+        clean_content = str(msg['content']) # Display clean text
+        st.markdown(f"<div class='chat-message {css}'>{clean_content}</div>", unsafe_allow_html=True)
 
-    # Hint Button (Attitude Penalty)
-    if st.session_state.gate < 5:
-        col1, col2 = st.columns([4, 1])
-        with col2:
-            if st.button("🆘 힌트 (-10 Att)"):
-                # Penalty Logic
-                st.session_state.stats['att'] -= 10
-                st.toast("⚠️ 태도 점수가 10점 감점되었습니다!")
-                
-                # Get Hint
-                hint_sys = "당신은 힌트 요정입니다. 결정적 힌트를 짧게 주세요. JSON: {'response': '...'}"
-                res = call_gemini(api_key, hint_sys, f"Topic:{st.session_state.topic}\nHistory:{st.session_state.messages[-1]['content']}", st.session_state.auto_model)
-                
-                hint_text = res.get('response', '힌트 생성 실패')
-                st.session_state.messages.append({"role":"whisper", "content":f"👼 힌트: {hint_text}"})
-                st.rerun()
+    # Whisper (Gate 1~4)
+    if st.session_state.messages[-1]["role"] == "assistant" and st.session_state.gate < 5:
+        with st.expander("👼 Help"):
+            if st.button("힌트"):
+                hint = call_gemini(api_key, WHISPER_SYS, f"주제:{st.session_state.topic}\n질문:{st.session_state.messages[-1]['content']}", st.session_state.auto_model)
+                st.markdown(f"<div class='chat-message whisper'>👼 {hint.get('response', '...')}</div>", unsafe_allow_html=True)
 
-    # Input
     if st.session_state.gate <= 4:
-        if prompt := st.chat_input("논리 입력..."):
+        if prompt := st.chat_input("입력..."):
             st.session_state.messages.append({"role":"user", "content":prompt})
             st.rerun()
 
-    # AI Logic
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         with st.chat_message("assistant"):
-            box = st.empty(); box.markdown("채점 중...")
+            box = st.empty(); box.markdown("Thinking...")
             
-            role = st.session_state.user_role
-            sys = SCHOOL_SYS if role=="SCHOOL" else RED_TEAM_SYS if role=="PRO" else DOPPEL_SYS
+            # Prompt Selection Logic
+            sys = ""
+            if role == "SCHOOL":
+                # [FIX] 학교 레벨에 따른 프롬프트 선택
+                sys = get_school_prompt(st.session_state.school_level)
+            elif role == "PRO":
+                sys = RED_TEAM_SYS
+            else:
+                sys = DOPPEL_SYS
             
-            inst = f"Current Gate: {st.session_state.gate}. User Input: {st.session_state.messages[-1]['content']}"
-            res = call_gemini(api_key, sys, inst, st.session_state.auto_model)
+            # Common Instruction
+            inst = f"현재 단계: Gate {st.session_state.gate}. 사용자의 논리를 검증하고 통과(PASS) 여부를 결정해. JSON: {{'decision':'PASS'|'FAIL', 'response':'...'}}"
+            if role == "EXPLORER": inst += ", 'doppelganger': '위인 이름'"
+
+            res = call_gemini(api_key, sys, f"{inst}\nUser:{st.session_state.messages[-1]['content']}", st.session_state.auto_model)
             
-            text = res.get('response', 'Error')
+            text = res.get('response', str(res))
             box.markdown(f"<div class='chat-message bot'>{text}</div>", unsafe_allow_html=True)
             st.session_state.messages.append({"role":"assistant", "content":text})
-            
-            # [핵심] 스탯 업데이트 로직
-            deltas = res.get('score_delta', {})
-            if deltas:
-                changes = []
-                for k, v in deltas.items():
-                    if k in st.session_state.stats:
-                        st.session_state.stats[k] = max(0, min(100, st.session_state.stats[k] + v))
-                        if v != 0: changes.append(f"{k.upper()} {'+' if v>0 else ''}{v}")
-                
-                if changes:
-                    st.toast(f"📈 스탯 변동: {', '.join(changes)}")
 
             if res.get('decision') == "PASS":
                 if st.session_state.gate < 4:
-                    st.session_state.gate += 1; time.sleep(1.5); st.rerun()
+                    st.session_state.gate += 1; st.toast("✅ Passed!"); time.sleep(1); st.rerun()
                 else:
+                    st.session_state.result_data = res
                     st.session_state.mode = "ARTIFACT"; st.rerun()
 
 # --- SCENE 4: ARTIFACT ---
 elif st.session_state.mode == "ARTIFACT":
     st.balloons()
-    st.markdown("<h1 style='text-align:center; color:#00E676;'>LEGENDARY</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center; color:#00E676;'>COMPLETE</h1>", unsafe_allow_html=True)
     
-    # Final Radar Chart
-    labels = {"und":"이해력", "exp":"설명력", "cre":"창의력", "syn":"융합력", "att":"애티튜드"}
-    df = pd.DataFrame(dict(r=list(st.session_state.stats.values()), theta=list(labels.values())))
-    fig = px.line_polar(df, r='r', theta='theta', line_close=True, range_r=[0, 100])
-    fig.update_traces(fill='toself', line_color='#00E676')
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.markdown(f"<h3 style='text-align:center;'>최종 태도 점수: {st.session_state.stats['att']}점</h3>", unsafe_allow_html=True)
-    if st.session_state.stats['att'] < 80:
-        st.warning("⚠️ 힌트를 너무 많이 사용했습니다. 다음엔 스스로 힘으로 도전하세요!")
-    else:
-        st.success("🎖️ 명예로운 승리입니다!")
+    if not st.session_state.artifact:
+        with st.spinner("Creating..."):
+            dialogue = json.dumps(st.session_state.messages)
+            data = call_gemini(api_key, ARTIFACT_SYS, f"Dialog: {dialogue}", st.session_state.auto_model)
+            st.session_state.artifact = data
+            
+            # Audio Generation
+            script = f"{data.get('closing_remark', '축하합니다.')}"
+            st.session_state.audio_path = generate_audio(script)
 
-    if st.button("처음으로"): st.session_state.clear(); st.rerun()
+    data = st.session_state.artifact
+    st.markdown(f"""
+        <div class="artifact-box">
+            <h3>🏆 {data.get('title', 'Result')}</h3>
+            <p>✅ {data.get('fact_summary', [''])[0]}</p>
+            <div style='background:rgba(255,215,0,0.1); padding:10px; border-radius:5px; color:#FFD700; margin:10px 0;'>
+                ❝ {data.get('user_insight', '')} ❞
+            </div>
+            <p style='font-size:0.8rem; color:#aaa;'>AI: {data.get('closing_remark', '')}</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    if st.session_state.audio_path:
+        st.audio(st.session_state.audio_path, format="audio/mp3")
+        
+    if st.button("🏠 Home"): st.session_state.clear(); st.rerun()
