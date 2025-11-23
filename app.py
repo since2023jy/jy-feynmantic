@@ -55,7 +55,7 @@ def delete_thought_from_db(thought_id):
 init_db()
 
 # ==========================================
-# [AI & NEWS]
+# [NEWS & AI]
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_google_news_kr():
@@ -74,11 +74,11 @@ def get_google_news_kr():
 
 def call_gemini_step(api_key, concept, step_type):
     if not api_key: return "키 없음"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
-    # 프롬프트 설계
+    # [FIX] 모델명을 가장 안정적인 'gemini-pro'로 변경 (404 에러 해결)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+    
     if step_type == "briefing":
-        # [NEW] 학습 모드: 선생님이 개념을 요약해줌
         prompt = f"사용자가 '{concept}'에 대해 공부하려고 해. 이 주제의 핵심 내용, 배경, 중요한 사실 3가지를 요약해서 '브리핑'해줘. 사용자가 읽고 이해할 수 있게 명확한 한국어로 설명해."
     elif step_type == "feynman":
         prompt = f"개념 '{concept}'을 12살 아이에게 설명하듯 쉬운 비유를 들어 3문장으로 설명해줘. (한국어)"
@@ -94,15 +94,15 @@ def call_gemini_step(api_key, concept, step_type):
             res_json = json.loads(response.read().decode('utf-8'))
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        return f"AI 에러: {str(e)}"
+        # 에러 메시지를 더 자세히 출력
+        return f"AI 연결 오류: {str(e)} (API Key를 확인해주세요)"
 
 # ==========================================
 # [STATE MANAGEMENT]
 # ==========================================
 if 'step' not in st.session_state: st.session_state.step = 1
-# 위저드 데이터
 if 'w_concept' not in st.session_state: st.session_state.w_concept = ""
-if 'w_briefing' not in st.session_state: st.session_state.w_briefing = "" # [NEW] 브리핑 내용
+if 'w_briefing' not in st.session_state: st.session_state.w_briefing = "" 
 if 'w_expl' not in st.session_state: st.session_state.w_expl = ""
 if 'w_fals' not in st.session_state: st.session_state.w_fals = ""
 if 'w_tags' not in st.session_state: st.session_state.w_tags = ""
@@ -131,7 +131,6 @@ with st.sidebar:
         st.markdown("[👉 키 발급받기](https://aistudio.google.com/app/apikey)")
     
     st.markdown("---")
-    # 진행 상황 표시 (총 5단계로 변경)
     progress = (st.session_state.step - 1) / 5
     st.progress(progress)
     st.caption(f"Phase {st.session_state.step}/5")
@@ -139,7 +138,7 @@ with st.sidebar:
 # ==========================================
 # [MAIN] Wizard UI
 # ==========================================
-st.title("🧠 FeynmanTic v7.0")
+st.title("🧠 FeynmanTic v7.1")
 
 # --- STEP 1: 주제 선정 ---
 if st.session_state.step == 1:
@@ -155,18 +154,17 @@ if st.session_state.step == 1:
                 st.session_state.w_concept = news
                 next_step(); st.rerun()
     with col_manual:
-        st.subheader("✍️ 관심 주제 입력")
+        st.subheader("✍️ 직접 입력")
         manual = st.text_input("주제", placeholder="예: 양자역학")
         if st.button("Start ➡️", type="primary"):
             if manual:
                 st.session_state.w_concept = manual
                 next_step(); st.rerun()
 
-# --- STEP 2: [NEW] AI 브리핑 (학습 단계) ---
+# --- STEP 2: AI 브리핑 (학습 단계) ---
 elif st.session_state.step == 2:
     st.header(f"Step 2. '{st.session_state.w_concept}' 학습하기")
     
-    # 브리핑 생성 (최초 1회만)
     if not st.session_state.w_briefing:
         if google_api_key:
             with st.spinner(f"AI 선생님이 '{st.session_state.w_concept}'에 대한 핵심 요약 노트를 만들고 있습니다..."):
@@ -177,7 +175,6 @@ elif st.session_state.step == 2:
             st.warning("API 키가 없어서 브리핑을 건너뜁니다.")
             st.session_state.w_briefing = "API 키를 입력하면 AI 요약을 볼 수 있습니다."
 
-    # 브리핑 출력 (읽기 모드)
     st.markdown("""
     <div style="background-color:#f0f7ff; padding:20px; border-radius:10px; border-left: 5px solid #3498db;">
         <h4>🤖 AI Summary Note</h4>
@@ -189,7 +186,6 @@ elif st.session_state.step == 2:
     st.write(st.session_state.w_briefing)
     
     st.markdown("---")
-    st.caption("충분히 읽으셨나요? 이제 이해한 내용을 바탕으로 직접 설명해볼 차례입니다.")
     
     col1, col2 = st.columns([1, 3])
     with col1:
