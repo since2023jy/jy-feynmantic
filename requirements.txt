@@ -1,4 +1,5 @@
 streamlit
-requests
+google-generativeai>=0.8.3
 pandas
 plotly
+gTTS
