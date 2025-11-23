@@ -3,10 +3,11 @@ import sqlite3
 import datetime
 import pandas as pd
 import streamlit.components.v1 as components
-from openai import OpenAI
+import json
+import urllib.request # 👈 핵심: 라이브러리 설치 없이 API 호출하는 내장 모듈
 
 # ==========================================
-# [DATABASE]
+# [DATABASE] 
 # ==========================================
 def init_db():
     conn = sqlite3.connect('feynman.db', check_same_thread=False)
@@ -52,46 +53,59 @@ def delete_thought_from_db(thought_id):
 init_db()
 
 # ==========================================
-# [AI BRAIN] GPT-4o-mini 연결 (가성비 최적화)
+# [AI BRAIN] 설치가 필요 없는 REST API 호출 방식
 # ==========================================
-def generate_ai_insight(api_key, concept):
+def call_gemini_raw(api_key, concept):
     """
-    AI가 파인만과 포퍼가 되어 대신 작성해줍니다.
+    google-generativeai 라이브러리 없이, http 요청으로 직접 Gemini를 부릅니다.
     """
     if not api_key:
-        return "API Key가 필요합니다.", "API Key를 입력하세요.", "AI,Error"
+        return "키 없음", "API Key를 입력하세요.", "Error"
+
+    # Gemini 1.5 Flash 엔드포인트
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     
-    client = OpenAI(api_key=api_key)
+    # 프롬프트 구성
+    prompt_text = f"""
+    당신은 '파인만틱 엔진'의 AI 코어입니다. 개념 '{concept}'에 대해 한국어로 다음 형식에 맞춰 답변하세요.
     
-    prompt = f"""
-    당신은 '파인만틱 엔진'의 AI 코어입니다. 사용자가 입력한 개념인 '{concept}'에 대해 다음 형식으로 답변하세요.
-    한국어로 답변해야 합니다.
+    1. [Feynman]: 12살 아이에게 설명하듯 쉬운 비유 (3문장 이내)
+    2. [Popper]: 이 이론의 한계, 반론, 혹은 예외 상황 (2문장 이내)
+    3. [Tags]: 연관 키워드 3개 (쉼표 구분)
     
-    1. [Feynman]: 이 개념을 12살 아이도 이해할 수 있게 아주 쉽고 직관적인 비유를 들어 설명하세요. (3문장 이내)
-    2. [Popper]: 이 개념이나 이론이 틀릴 수 있는 상황, 한계점, 혹은 반론을 날카롭게 지적하세요. (2문장 이내)
-    3. [Tags]: 이 개념과 연관된 키워드 3개를 쉼표로 구분해 적으세요.
-    
-    형식 구분자: ||| (각 파트 사이를 |||로 구분하세요)
-    예시 출력: 시간은 고무줄 같다... ||| 하지만 양자 역학에서는... ||| 물리,시간,상대성
+    구분자: |||
     """
     
+    # 데이터 패키징
+    data = {
+        "contents": [{
+            "parts": [{"text": prompt_text}]
+        }]
+    }
+    
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini", # 속도와 비용을 위해 mini 모델 사용
-            messages=[{"role": "system", "content": "You are a helpful assistant."},
-                      {"role": "user", "content": prompt}],
-            temperature=0.7
+        # Python 내장 기능으로 요청 전송 (No pip install needed)
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(data).encode('utf-8'), 
+            headers={'Content-Type': 'application/json'}
         )
-        content = response.choices[0].message.content
-        parts = content.split('|||')
         
-        if len(parts) >= 3:
-            return parts[0].strip(), parts[1].strip(), parts[2].strip()
-        else:
-            return content, "AI 파싱 에러", "Error"
+        with urllib.request.urlopen(req) as response:
+            res_body = response.read().decode('utf-8')
+            res_json = json.loads(res_body)
             
+            # 응답 파싱
+            content = res_json['candidates'][0]['content']['parts'][0]['text']
+            parts = content.split('|||')
+            
+            if len(parts) >= 3:
+                return parts[0].strip(), parts[1].strip(), parts[2].strip()
+            else:
+                return content, "형식 파싱 실패", "Error"
+
     except Exception as e:
-        return f"에러 발생: {str(e)}", "AI 호출 실패", "Error"
+        return f"통신 에러: {str(e)}", "API Key를 확인하세요.", "Error"
 
 # ==========================================
 # [UI] Setup
@@ -99,23 +113,27 @@ def generate_ai_insight(api_key, concept):
 st.set_page_config(page_title="FeynmanTic OS", page_icon="🧠", layout="wide")
 df = get_all_thoughts()
 
-# 사이드바: API 키 입력
 with st.sidebar:
-    st.title("⚙️ Engine Room")
-    openai_api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
-    st.caption("키가 없으면 수동 모드로 작동합니다.")
+    st.title("⚙️ Setup")
+    google_api_key = st.text_input("Google API Key", type="password", placeholder="AI Studio Key")
+    if not google_api_key:
+        st.warning("키가 없으면 AI가 작동하지 않습니다.")
+        st.markdown("[👉 키 무료 발급받기](https://aistudio.google.com/app/apikey)")
+    else:
+        st.success("시스템 가동 준비 완료")
+    
     st.markdown("---")
-    st.metric(label="Total Nodes", value=len(df))
+    st.metric("Total Knowledge", len(df))
 
-st.title("🧠 FeynmanTic OS v2.5")
-st.caption("Feature: AI Co-Pilot (Auto-Drafting)")
+st.title("🧠 FeynmanTic OS v3.5")
+st.caption("No-Install Edition: Pure Python & REST API")
 
 # ==========================================
 # [VISUALIZATION] Interactive Graph
 # ==========================================
 st.subheader("🕸 Living Knowledge Network")
 if df.empty:
-    st.info("지식이 없습니다. 아래 엔진을 가동하세요.")
+    st.info("데이터가 없습니다. 지식을 입력하세요.")
 else:
     nodes = []
     edges = []
@@ -161,73 +179,64 @@ else:
     components.html(html_code, height=420)
 
 # ==========================================
-# [ENGINE] AI-Powered Input Form
+# [ENGINE] Input
 # ==========================================
 st.markdown("---")
-st.subheader("🚀 Engine Input (AI Powered)")
+st.subheader("🚀 Engine Input")
 
-# 세션 상태 초기화 (AI 답변을 폼에 채워넣기 위함)
-if 'ai_concept' not in st.session_state: st.session_state['ai_concept'] = ""
-if 'ai_expl' not in st.session_state: st.session_state['ai_expl'] = ""
-if 'ai_fals' not in st.session_state: st.session_state['ai_fals'] = ""
-if 'ai_tags' not in st.session_state: st.session_state['ai_tags'] = ""
+if 'ai_c' not in st.session_state: st.session_state['ai_c'] = ""
+if 'ai_e' not in st.session_state: st.session_state['ai_e'] = ""
+if 'ai_f' not in st.session_state: st.session_state['ai_f'] = ""
+if 'ai_t' not in st.session_state: st.session_state['ai_t'] = ""
 
-col_input, col_btn = st.columns([4, 1])
-with col_input:
-    target_concept = st.text_input("무엇을 공부하시겠습니까?", key="target_concept_input", placeholder="예: 엔트로피, 마케팅 깔때기...")
-
-with col_btn:
-    st.write("") # 줄맞춤용
-    st.write("") 
-    if st.button("🤖 AI 작성"):
-        if not openai_api_key:
-            st.error("API 키 필요")
-        elif not target_concept:
-            st.warning("개념을 입력하세요")
+col1, col2 = st.columns([4, 1])
+with col1:
+    target = st.text_input("공부할 주제", placeholder="예: 블랙홀")
+with col2:
+    st.write("")
+    st.write("")
+    if st.button("✨ Gemini"):
+        if not google_api_key:
+            st.error("키 필요")
+        elif not target:
+            st.warning("주제 필요")
         else:
-            with st.spinner("파인만과 포퍼가 회의 중입니다..."):
-                expl, fals, tags = generate_ai_insight(openai_api_key, target_concept)
-                st.session_state['ai_concept'] = target_concept
-                st.session_state['ai_expl'] = expl
-                st.session_state['ai_fals'] = fals
-                st.session_state['ai_tags'] = tags
-                st.success("초안 작성 완료! 아래 내용을 수정해서 저장하세요.")
+            with st.spinner("Thinking..."):
+                e, f, t = call_gemini_raw(google_api_key, target)
+                st.session_state['ai_c'] = target
+                st.session_state['ai_e'] = e
+                st.session_state['ai_f'] = f
+                st.session_state['ai_t'] = t
+                st.success("완료")
 
-# 탭 입력 폼 (AI가 채워준 내용이 default value로 들어감)
-tab1, tab2, tab3 = st.tabs(["1. Feynman", "2. Popper", "3. Deutsch"])
-
-with st.form(key='final_form'):
+tab1, tab2, tab3 = st.tabs(["Feynman", "Popper", "Deutsch"])
+with st.form("main_form"):
     with tab1:
-        # session_state 값을 value로 설정
-        c_in = st.text_input("Concept", value=st.session_state['ai_concept'])
-        e_in = st.text_area("Redefinition (AI Draft)", value=st.session_state['ai_expl'], height=100)
+        c_in = st.text_input("Concept", value=st.session_state['ai_c'])
+        e_in = st.text_area("Explanation", value=st.session_state['ai_e'])
     with tab2:
-        f_in = st.text_area("Falsification (AI Draft)", value=st.session_state['ai_fals'], height=100)
+        f_in = st.text_area("Falsification", value=st.session_state['ai_f'])
     with tab3:
-        t_in = st.text_input("Tags (AI Draft)", value=st.session_state['ai_tags'])
-        
-    if st.form_submit_button("💾 최종 저장 (Save to Grid)"):
-        if not c_in:
-            st.error("개념이 비어있습니다.")
-        else:
+        t_in = st.text_input("Tags", value=st.session_state['ai_t'])
+    
+    if st.form_submit_button("Save"):
+        if c_in:
             save_thought_to_db(c_in, e_in, f_in, t_in)
-            # 저장 후 세션 초기화
-            st.session_state['ai_concept'] = ""
-            st.session_state['ai_expl'] = ""
-            st.session_state['ai_fals'] = ""
-            st.session_state['ai_tags'] = ""
+            # 초기화
+            for key in ['ai_c', 'ai_e', 'ai_f', 'ai_t']:
+                st.session_state[key] = ""
             st.rerun()
+        else:
+            st.error("내용 없음")
 
 # ==========================================
 # [ARCHIVE]
 # ==========================================
-with st.expander("📂 지식 보관함"):
+with st.expander("📂 Archive"):
     if not df.empty:
-        for index, row in df.iterrows():
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                st.write(f"**{row['concept']}**: {row['explanation'][:50]}...")
-            with col2:
-                if st.button("Del", key=f"del_{row['id']}"):
-                    delete_thought_from_db(row['id'])
-                    st.rerun()
+        for idx, row in df.iterrows():
+            c1, c2 = st.columns([5,1])
+            c1.write(f"**{row['concept']}**")
+            if c2.button("Del", key=f"d_{row['id']}"):
+                delete_thought_from_db(row['id'])
+                st.rerun()
