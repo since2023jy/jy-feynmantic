@@ -67,7 +67,7 @@ def get_spectator_feed():
 
 # AI Config
 # Flash 모델 에러 방지를 위해 Pro 모델로 변경
-MODEL_NAME = 'gemini-1.5-pro' 
+MODEL_NAME = 'gemini-pro'
 SAFETY = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
 
 # Prompts
