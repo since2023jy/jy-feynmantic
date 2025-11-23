@@ -11,7 +11,7 @@ from datetime import datetime
 # ==========================================
 # [Layer 0] Config
 # ==========================================
-st.set_page_config(page_title="FeynmanTic Auto", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="FeynmanTic Stable", page_icon="⚡", layout="centered")
 
 st.markdown("""
     <style>
@@ -20,47 +20,61 @@ st.markdown("""
     .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; line-height: 1.6; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .chat-message.user { background-color: #161B22; border-right: 4px solid #7C4DFF; text-align: right; }
     .chat-message.bot { background-color: #1F2428; border-left: 4px solid #FF4B4B; font-family: 'Courier New'; }
-    .success-box { background-color: #00E676; color: black; padding: 10px; border-radius: 5px; font-weight: bold; margin-bottom: 10px;}
     .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# [Layer 1] Logic
+# [Layer 1] Logic & Data
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('feynmantic_auto.db')
+    conn = sqlite3.connect('feynmantic_stable.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, topic TEXT, mode TEXT, dialogue TEXT, score_json TEXT)''')
     conn.commit()
     conn.close()
 
-# [핵심] 사용 가능한 모델 자동 검색 함수
-def get_available_model(api_key):
-    try:
-        genai.configure(api_key=api_key)
-        # 구글에게 "나 무슨 모델 쓸 수 있어?" 물어보기
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                # 이름에 gemini가 들어가는 첫 번째 모델 반환
-                if 'gemini' in m.name:
-                    return m.name
-        return None
-    except:
-        return None
+def save_log(topic, mode, messages, score_data=None):
+    conn = sqlite3.connect('feynmantic_stable.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO logs (timestamp, topic, mode, dialogue, score_json) VALUES (?, ?, ?, ?, ?)',
+              (datetime.now().strftime("%Y-%m-%d"), topic, mode, json.dumps(messages, ensure_ascii=False), json.dumps(score_data) if score_data else None))
+    conn.commit()
+    conn.close()
 
-# AI Logic
+def get_spectator_feed():
+    return [{"topic": "비트코인", "user_view": "디지털 에너지다.", "f_score": 92, "likes": 128}]
+
+# AI Settings
 SAFETY = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
 
+INTUITION_SYS = """당신은 '직관 유도자'입니다. 밸런스 게임을 만드세요. JSON: { "scenario": "...", "option_a": "...", "option_b": "...", "question": "..." }"""
 SOCRATIC_SYS = """당신은 '파인만틱 소크라테스'입니다. 질문으로 논리를 검증하세요. JSON: { "decision": "PASS"|"FAIL", "response": "..." }"""
+WHISPER_SYS = """당신은 '천사의 속삭임'입니다. 힌트를 짧게 주세요."""
+SCORE_SYS = """당신은 '논리 심판관'입니다. 4가지 지표(0~100) 평가. JSON: { "clarity": 0, "causality": 0, "defense": 0, "originality": 0, "total_score": 0, "comment": "..." }"""
 
-def call_gemini(api_key, sys, user, model_name):
+def call_gemini(api_key, sys, user, json_mode=True):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name, system_instruction=sys, safety_settings=SAFETY, generation_config={"response_mime_type": "application/json"})
-        res = model.generate_content(user)
-        return json.loads(res.text)
-    except Exception as e: return {"decision": "FAIL", "response": f"Error: {e}"}
+        
+        # [핵심 변경] Flash 모델 강제 사용 (가장 안정적이고 한도 높음)
+        # 만약 이것도 안되면 Pro로 자동 다운그레이드
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=sys, safety_settings=SAFETY, generation_config={"response_mime_type": "application/json"} if json_mode else None)
+            res = model.generate_content(user)
+        except:
+            model = genai.GenerativeModel('gemini-pro', safety_settings=SAFETY)
+            # 구형 모델 호환용 프롬프트 조작
+            combined = f"{sys}\n\nUser Input: {user}\n\n(Response in JSON)"
+            res = model.generate_content(combined)
+
+        return json.loads(res.text) if json_mode else res.text
+        
+    except Exception as e:
+        # 429 에러(한도 초과) 시 안내 메시지
+        if "429" in str(e):
+            return {"decision": "FAIL", "response": "⚠️ 사용량 초과! 1분 뒤에 다시 시도해주세요. (무료 계정 제한)"}
+        return {"decision": "FAIL", "response": f"Error: {e}"}
 
 # ==========================================
 # [Layer 2] UI Flow
@@ -70,40 +84,23 @@ init_db()
 if "mode" not in st.session_state: st.session_state.mode = "HOME"
 if "gate" not in st.session_state: st.session_state.gate = 0
 if "messages" not in st.session_state: st.session_state.messages = []
-if "auto_model" not in st.session_state: st.session_state.auto_model = None
 
 with st.sidebar:
-    st.title("⚡ FeynmanTic Auto")
+    st.title("⚡ FeynmanTic Stable")
     api_key = st.text_input("Google API Key", type="password")
-    
-    if api_key:
-        if st.button("🔄 모델 연결하기 (Connect)"):
-            with st.spinner("사용 가능한 모델 찾는 중..."):
-                found_model = get_available_model(api_key)
-                if found_model:
-                    st.session_state.auto_model = found_model
-                    st.success(f"연결 성공! 모델: {found_model}")
-                else:
-                    st.error("이 키로 사용할 수 있는 Gemini 모델이 없습니다. (권한/지역 문제)")
-
-    if st.session_state.auto_model:
-        st.info(f"✅ Running on: {st.session_state.auto_model}")
-
     if st.button("Reset"): st.session_state.clear(); st.rerun()
 
 # --- HOME ---
 if st.session_state.mode == "HOME":
     st.markdown("<h1 style='text-align: center;'>ARENA OF THOUGHT</h1>", unsafe_allow_html=True)
-    
-    if st.session_state.auto_model:
-        st.markdown(f"<div class='success-box'>시스템 준비 완료 ({st.session_state.auto_model})</div>", unsafe_allow_html=True)
-        if st.button("🔥 Daily Dismantle: 비트코인"): 
-            st.session_state.topic="비트코인"; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
-    else:
-        st.warning("👈 사이드바에서 API Key를 넣고 [모델 연결하기]를 먼저 눌러주세요.")
+    if st.button("🔥 Daily Dismantle: 비트코인"): 
+        if not api_key: st.error("API Key Required"); st.stop()
+        st.session_state.topic="비트코인"; st.session_state.mode="CHAT"; st.session_state.gate=1; st.rerun()
 
 # --- CHAT ---
 elif st.session_state.mode == "CHAT":
+    st.markdown(f"### Topic: {st.session_state.get('topic')}")
+    
     for msg in st.session_state.messages:
         role = "user" if msg["role"] == "user" else "bot"
         st.markdown(f"<div class='chat-message {role}'>{msg['content']}</div>", unsafe_allow_html=True)
@@ -117,7 +114,7 @@ elif st.session_state.mode == "CHAT":
             box = st.empty(); box.markdown("Thinking...")
             
             instruction = f"Gate: {st.session_state.gate}"
-            res = call_gemini(api_key, f"{SOCRATIC_SYS}\n{instruction}", f"Topic:{st.session_state.topic}\nUser:{st.session_state.messages[-1]['content']}", st.session_state.auto_model)
+            res = call_gemini(api_key, f"{SOCRATIC_SYS}\n{instruction}", f"Topic:{st.session_state.get('topic')}\nUser:{st.session_state.messages[-1]['content']}")
             
             full_text = res.get('response', str(res))
             box.markdown(f"<div class='chat-message bot'>{full_text}</div>", unsafe_allow_html=True)
