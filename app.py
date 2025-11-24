@@ -1,310 +1,266 @@
 import streamlit as st
+import google.generativeai as genai
+import json
 import time
-import html
+import random
+import sqlite3
+import pandas as pd
+import plotly.express as px
+from gtts import gTTS
+from io import BytesIO
 import re
-import streamlit.components.v1 as components
-from dataclasses import dataclass
+from datetime import datetime, date
 
 # ==========================================
-# 1. CONFIG & CONSTANTS
+# [Layer 0] Config & Styles
 # ==========================================
-@dataclass(frozen=True)
-class AppConfig:
-    VERSION = "15.0.0 (Middle School Edition)"
-    MAX_CHARS = 3000
-    STORAGE_KEY = "feynman_v15_middle"
-    # 중학생용 컬러: 활기차고 게임 같은 느낌
-    COLOR_THEME = "#fbbf24" # Amber (Coin Color)
-    COLOR_ACCENT = "#ef4444" # Mario Red
-    BG_GRADIENT = "linear-gradient(180deg, #2dd4bf 0%, #0f172a 100%)" # Sky to Dark
+st.set_page_config(page_title="FeynmanTic V37", page_icon="🧠", layout="wide")
 
-st.set_page_config(
-    page_title="FeynmanTic: Logic Adventure",
-    page_icon="🎮",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
-
-# ==========================================
-# 2. LOGIC ENGINE (Middle School Logic)
-# ==========================================
-class MiddleSchoolEngine:
-    """중학생 논리 구조 분석 엔진"""
-    
-    @staticmethod
-    def analyze(text: str):
-        # 1. 기본 데이터
-        clean_text = text.strip()
-        length = len(clean_text)
-        sentences = re.split(r'[.?!]\s*', clean_text)
-        sentences = [s for s in sentences if s] # 빈 문장 제거
-        
-        # 2. 논리 키워드 탐지
-        has_reason = any(w in clean_text for w in ["왜냐하면", "때문", "이유는"])
-        has_example = any(w in clean_text for w in ["예를", "예시", "가령", "비유"])
-        has_concl = any(w in clean_text for w in ["따라서", "결론", "요약", "그러므로", "결국"])
-        
-        # 3. 스테이지 판정 (Game Logic)
-        # Stage 0: 시작 전
-        # Stage 1: 주장 (글자수 20자 이상)
-        # Stage 2: 근거 (이유 관련 접속사 포함)
-        # Stage 3: 예시 (예시 관련 접속사 포함)
-        # Stage 4: 완결 (결론 포함 + 충분한 길이)
-        
-        stage = 0
-        feedback = "생각의 모험을 떠나볼까요? 주제를 적어보세요!"
-        progress = 0
-        
-        if length > 20:
-            stage = 1
-            progress = 25
-            feedback = "좋아요! 주장이 시작됐어요. 왜 그렇게 생각하나요? ('왜냐하면'을 써보세요)"
-            
-            if has_reason:
-                stage = 2
-                progress = 50
-                feedback = "근거가 생겼네요! 이해를 돕기 위한 예시가 있나요? ('예를 들어'를 써보세요)"
-                
-                if has_example:
-                    stage = 3
-                    progress = 75
-                    feedback = "훌륭한 예시입니다! 이제 결론을 지어볼까요? ('따라서'를 써보세요)"
-                    
-                    if has_concl and length > 100:
-                        stage = 4
-                        progress = 100
-                        feedback = "🎉 완벽한 논리입니다! 스테이지 클리어!"
-
-        return {
-            "stage": stage,
-            "progress": progress,
-            "feedback": feedback,
-            "has_reason": has_reason,
-            "has_example": has_example,
-            "has_concl": has_concl
-        }
-
-# ==========================================
-# 3. STATE MANAGEMENT
-# ==========================================
-if 'analysis' not in st.session_state:
-    st.session_state.analysis = MiddleSchoolEngine.analyze("")
-if 'input_text' not in st.session_state:
-    st.session_state.input_text = ""
-
-# ==========================================
-# 4. VISUAL SYSTEM (Mario Map CSS)
-# ==========================================
-def render_css(stage):
-    # 스테이지별 캐릭터 위치 계산 (0% ~ 90%)
-    mario_pos = f"{min(stage * 23, 90)}%"
-    
-    # 스테이지별 활성화 컬러
-    s1_color = "#fbbf24" if stage >= 1 else "#ffffff50"
-    s2_color = "#fbbf24" if stage >= 2 else "#ffffff50"
-    s3_color = "#fbbf24" if stage >= 3 else "#ffffff50"
-    s4_color = "#fbbf24" if stage >= 4 else "#ffffff50"
-
-    st.markdown(f"""
+st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;700&display=swap');
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    .stApp { background-color: #0E1117; color: #E0E0E0; font-family: 'Pretendard', sans-serif; }
     
-    /* 배경 & 기본 폰트 */
-    .stApp {{ background: {AppConfig.BG_GRADIENT}; background-attachment: fixed; }}
-    html, body, p, div, textarea {{ font-family: 'Noto Sans KR', sans-serif !important; }}
-    h1, h2, .game-font {{ font-family: 'Black Han Sans', sans-serif !important; letter-spacing: 1px; }}
+    .mode-card { background: #161B22; border: 1px solid #30363D; border-radius: 15px; padding: 25px; text-align: center; height: 180px; display: flex; flex-direction: column; justify-content: center; cursor: pointer; transition: 0.2s; }
+    .mode-card:hover { border-color: #7C4DFF; background: #1F2428; transform: translateY(-5px); }
     
-    /* UI 숨김 */
-    #MainMenu, header, footer {{ display: none !important; }}
-    
-    /* [Visual] The Mario Map Container */
-    .map-container {{
-        position: relative; width: 100%; height: 120px; 
-        background: rgba(0,0,0,0.3); border-radius: 20px; 
-        margin-top: 20px; padding: 20px;
-        border: 4px solid #4ade80; /* Ground Color */
-        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        overflow: hidden;
-    }}
-    
-    /* The Path Lines */
-    .path-line {{
-        position: absolute; top: 60px; left: 10%; width: 80%; height: 4px; 
-        background: rgba(255,255,255,0.2); z-index: 0;
-    }}
-    
-    /* Nodes (Stages) */
-    .node {{
-        position: absolute; top: 45px; width: 30px; height: 30px; 
-        border-radius: 50%; background: #333; border: 3px solid #fff;
-        z-index: 1; display: flex; align-items: center; justify-content: center;
-        font-size: 12px; font-weight: bold; color: white;
-        transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    }}
-    .node.active {{ background: #ef4444; border-color: #fbbf24; transform: scale(1.2); box-shadow: 0 0 15px #fbbf24; }}
-    
-    /* Labels */
-    .node-label {{
-        position: absolute; top: 80px; font-size: 12px; color: white; 
-        text-shadow: 0 2px 4px rgba(0,0,0,0.8); width: 60px; text-align: center;
-        transform: translateX(-15px); font-family: 'Black Han Sans';
-    }}
+    .chat-message { padding: 1.2rem; border-radius: 1rem; margin-bottom: 1rem; line-height: 1.6; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .chat-message.user { background-color: #21262D; border-right: 4px solid #7C4DFF; text-align: right; margin-left: 15%; }
+    .chat-message.bot { background-color: #161B22; border-left: 4px solid #FF4B4B; font-family: 'Courier New', monospace; margin-right: 5%; }
+    .chat-message.thinking { background-color: #383838; color: #ccc; border-left: 4px solid #FFD700; font-style: italic; margin-right: 10%; }
 
-    /* The Player (Mario) */
-    .player {{
-        position: absolute; top: 25px; left: {mario_pos}; 
-        font-size: 40px; z-index: 10;
-        transition: left 0.8s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-        filter: drop-shadow(0 5px 5px rgba(0,0,0,0.5));
-        animation: bounce 1s infinite alternate;
-    }}
-    @keyframes bounce {{ from {{ transform: translateY(0); }} to {{ transform: translateY(-5px); }} }}
-
-    /* Input Area (Game Panel) */
-    .stTextArea textarea {{
-        background-color: rgba(255, 255, 255, 0.9) !important;
-        color: #333 !important;
-        border: 4px solid #3b82f6 !important;
-        border-radius: 15px !important;
-        font-size: 18px !important; line-height: 1.6 !important;
-        padding: 20px !important; min-height: 200px !important;
-        box-shadow: inset 0 5px 10px rgba(0,0,0,0.1);
-    }}
-    .stTextArea textarea:focus {{ border-color: #fbbf24 !important; }}
-
-    /* Feedback Box (NPC Dialogue) */
-    .npc-box {{
-        background: white; border: 4px solid #333; border-radius: 15px;
-        padding: 15px 20px; margin-bottom: 20px; position: relative;
-        box-shadow: 5px 5px 0px rgba(0,0,0,0.2);
-        display: flex; align-items: center; gap: 15px;
-    }}
-    .npc-box::after {{
-        content: ""; position: absolute; bottom: -10px; left: 30px;
-        border-width: 10px 10px 0; border-style: solid;
-        border-color: #333 transparent; display: block; width: 0;
-    }}
+    .territory-badge { background: #00E676; color: black; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; font-weight: bold; }
+    .fog-badge { background: #333; color: #888; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; border: 1px dashed #555; }
     
-    .check-badge {{
-        background: #22c55e; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; margin-right: 5px;
-    }}
+    .artifact-box { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 2px solid #FFD700; border-radius: 15px; padding: 25px; text-align: center; margin-top: 20px; }
+    
+    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; }
+    .stTextInput input { background-color: #0d1117 !important; color: #fff !important; border: 1px solid #30363d !important; }
     </style>
-    """, unsafe_allow_html=True)
-
-# ==========================================
-# 5. LOGIC HANDLER
-# ==========================================
-def on_text_change():
-    text = st.session_state.input_text
-    st.session_state.analysis = MiddleSchoolEngine.analyze(text)
-
-# CSS 적용 (State 기반)
-render_css(st.session_state.analysis['stage'])
-
-# ==========================================
-# 6. MAIN UI
-# ==========================================
-
-# Title Area
-col1, col2 = st.columns([1, 4])
-with col1:
-    st.markdown("<div style='font-size:40px;'>🍄</div>", unsafe_allow_html=True)
-with col2:
-    st.markdown("<h1 style='color:white; text-shadow: 3px 3px 0 #000;'>논리 어드벤처</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='color:#fbbf24; font-weight:bold;'>Level: 중학교 1학년</div>", unsafe_allow_html=True)
-
-# 1. NPC Feedback Area
-feedback = st.session_state.analysis['feedback']
-st.markdown(f"""
-<div class="npc-box">
-    <div style="font-size:30px;">🧙‍♂️</div>
-    <div style="color:#333; font-weight:bold;">{feedback}</div>
-</div>
 """, unsafe_allow_html=True)
 
-# 2. The Visual Map (Mario Style)
-# 노드 상태 계산
-s = st.session_state.analysis['stage']
-c1 = "active" if s >= 1 else ""
-c2 = "active" if s >= 2 else ""
-c3 = "active" if s >= 3 else ""
-c4 = "active" if s >= 4 else ""
+# ==========================================
+# [Layer 1] Logic & Core Functions
+# ==========================================
+def init_db():
+    conn = sqlite3.connect('feynmantic_v37.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, topic TEXT, dialogue TEXT)''')
+    conn.commit()
+    conn.close()
 
-# 아바타 선택 (스테이지별로 변신)
-avatar = "🚶"
-if s == 1: avatar = "🏃"
-if s == 2: avatar = "🧗"
-if s == 3: avatar = "🚴"
-if s == 4: avatar = "🦸"
+def find_working_model(api_key):
+    try:
+        genai.configure(api_key=api_key)
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        for p in priority:
+            for a in available:
+                if p in a: return a
+        return None
+    except: return None
 
-st.markdown(f"""
-<div class="map-container">
-    <div class="path-line"></div>
-    
-    <div class="node {c1}" style="left:10%;">1</div>
-    <div class="node-label" style="left:10%;">주장</div>
-    
-    <div class="node {c2}" style="left:35%;">2</div>
-    <div class="node-label" style="left:35%;">근거</div>
-    
-    <div class="node {c3}" style="left:60%;">3</div>
-    <div class="node-label" style="left:60%;">예시</div>
-    
-    <div class="node {c4}" style="left:85%;">🏁</div>
-    <div class="node-label" style="left:85%;">결론</div>
-    
-    <div class="player">{avatar}</div>
-</div>
-""", unsafe_allow_html=True)
+def generate_audio(text):
+    try:
+        sound_file = BytesIO()
+        tts = gTTS(text=text, lang='ko')
+        tts.write_to_fp(sound_file)
+        sound_file.seek(0)
+        return sound_file
+    except: return None
 
-# 3. Logic Check (Sub-goals)
-cols = st.columns(3)
-res = st.session_state.analysis
-with cols[0]:
-    if res['has_reason']: st.markdown("✅ **근거** 확보")
-    else: st.markdown("⬜ **근거** ('왜냐하면')")
-with cols[1]:
-    if res['has_example']: st.markdown("✅ **예시** 확보")
-    else: st.markdown("⬜ **예시** ('예를 들어')")
-with cols[2]:
-    if res['has_concl']: st.markdown("✅ **결론** 확보")
-    else: st.markdown("⬜ **결론** ('따라서')")
+def extract_json(text):
+    try:
+        return json.loads(text)
+    except:
+        try:
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match: return json.loads(match.group())
+            else: return None
+        except: return None
 
-st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+# --- DYNAMIC PROMPTS ---
+def get_persona_data(role, level=None):
+    if role == "SCHOOL":
+        return {"persona": "친절한 가정 교사", "instruction": "초등/중등 학생 눈높이에 맞춰 '비유'와 개념의 전제 조건을 'Unknown'으로 제시하십시오."}
+    elif role == "PRO":
+        return {"persona": "냉철한 투자 심의 위원", "instruction": "비즈니스 결함, 규제 리스크, 수익성(ROI) 같은 실용적 결함을 'Unknown'으로 제시하여 공격하십시오."}
+    elif role == "EXPLORER":
+        return {"persona": "광장의 소크라테스", "instruction": "주제의 역사, 윤리, 철학적 맥락 같은 경계를 확장할 새로운 영역을 'Unknown'으로 제시하십시오."}
+    return {"persona": "일반 지도 제작자", "instruction": "일반적인 지식의 연결고리를 Unknown으로 제시하세요."}
 
-# 4. Input Area (실시간 반응형)
-st.text_area(
-    "Input",
-    key="input_text",
-    placeholder="여기에 글을 쓰면 캐릭터가 움직여요!",
-    height=250,
-    label_visibility="collapsed",
-    on_change=on_text_change
-)
+MAP_SYS_BASE = """
+[Role] 당신은 '{role_persona}' 모드의 '지식의 지도 제작자'입니다.
+[Directive] {instruction}
+[Output JSON]
+{{
+    "decision": "CONTINUE"|"CONQUERED",
+    "response": "피드백 및 다음 질문 (사용자 역할에 맞는 질문)",
+    "known_keywords": ["키워드1", "키워드2"],
+    "unknown_keywords": ["키워드1", "키워드2"] 
+}}
+"""
 
-# 5. Cheat Button (힌트)
-if st.button("💡 힌트 보기 (자동 완성)"):
-    st.session_state.input_text = "나는 학교 급식을 개선해야 한다고 생각한다. 왜냐하면 맛있는 밥은 학생들의 행복이기 때문이다. 예를 들어, 수요일마다 나오는 스파게티는 모두가 좋아한다. 따라서 급식 메뉴에 학생들의 의견을 더 반영해야 한다."
-    on_text_change()
-    st.rerun()
+ARTIFACT_SYS = """당신은 '지식 큐레이터'입니다. 통찰을 강조하여 요약하세요. JSON: { "title": "...", "fact_summary": ["...", "..."], "user_insight": "...", "closing_remark": "..." }"""
 
-# JS: Auto-Save & Enter Logic
-components.html("""
-<script>
-    const textArea = parent.document.querySelector('textarea');
-    if (textArea) {
-        // Auto-Save Logic
-        textArea.addEventListener('input', function() {
-            localStorage.setItem('feynman_v15_middle', textArea.value);
-        });
+def call_gemini(api_key, sys, user, model_name):
+    try:
+        genai.configure(api_key=api_key)
+        config = {"response_mime_type": "application/json"} if "1.5" in model_name else {}
+        safety = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
         
-        // Restore Logic
-        const saved = localStorage.getItem('feynman_v15_middle');
-        if (saved && textArea.value === "") {
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-            nativeInputValueSetter.call(textArea, saved);
-            textArea.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-    }
-</script>
-""", height=0)
+        model = genai.GenerativeModel(model_name, system_instruction=sys, safety_settings=safety, generation_config=config)
+        final_prompt = f"{user}\n\n(Respond ONLY in JSON)" 
+        
+        res = model.generate_content(final_prompt)
+        return extract_json(res.text)
+    except Exception as e:
+        return {"decision": "FAIL", "response": f"System Error: {e}"}
+
+# ==========================================
+# [Layer 2] UI & State Management
+# ==========================================
+init_db()
+if "mode" not in st.session_state: st.session_state.mode = "CONNECT"
+if "auto_model" not in st.session_state: st.session_state.auto_model = None
+if "user_role" not in st.session_state: st.session_state.user_role = None
+if "messages" not in st.session_state: st.session_state.messages = []
+if "territory" not in st.session_state: st.session_state.territory = {"known": [], "unknown": []}
+if "topic" not in st.session_state: st.session_state.topic = ""
+if "artifact" not in st.session_state: st.session_state.artifact = None
+
+with st.sidebar:
+    st.title("⚡ FeynmanTic V37")
+    st.caption("Final Universe Edition")
+    api_key = st.text_input("Google API Key", type="password")
+    
+    if api_key and st.button("🔄 엔진 시동 (Connect)"):
+        with st.spinner("시스템 점검 중..."):
+            found = find_working_model(api_key)
+            if found: 
+                st.session_state.auto_model = found
+                st.success(f"Connected: {found}")
+                if st.session_state.mode == "CONNECT": 
+                     st.session_state.mode = "LANDING"
+            else: 
+                st.error("모델 연결 실패")
+    
+    if st.session_state.auto_model:
+        st.info(f"Engine: {st.session_state.auto_model.split('/')[-1]}")
+    
+    if st.button("Reset"): st.session_state.clear(); st.rerun()
+
+# --- SCENE 0: CONNECTION CHECK ---
+if st.session_state.mode == "CONNECT":
+    st.markdown("<h1 style='text-align: center;'>ENTER THE ARENA</h1><br>", unsafe_allow_html=True)
+    st.caption("API Key를 입력하고 엔진을 시동하십시오.")
+
+# --- SCENE 1: LANDING (Role Selection) ---
+elif st.session_state.mode == "LANDING":
+    st.markdown("<h1 style='text-align: center;'>CHOOSE YOUR UNIVERSE</h1><br>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    if c1.button("🎒 학생"): st.session_state.user_role = "SCHOOL"; st.session_state.mode = "HOME"; st.rerun()
+    if c2.button("🛡️ 직장인"): st.session_state.user_role = "PRO"; st.session_state.mode = "HOME"; st.rerunou.
+    if c3.button("🌌 탐험가"): st.session_state.user_role = "EXPLORER"; st.session_state.mode = "HOME"; st.rerun()
+
+# --- SCENE 2: HOME (Topic Input) ---
+elif st.session_state.mode == "HOME":
+    role = st.session_state.user_role
+    st.markdown(f"## {role}의 작전실")
+    
+    topic_input = st.text_input("정복할 영토(주제)를 입력하세요", placeholder="예: 비트코인, 광합성...")
+    if st.button("🚩 깃발 꽂고 정복 시작"):
+        if topic_input:
+            st.session_state.topic = topic_input
+            st.session_state.mode = "CONQUEST"
+            
+            role_data = get_persona_data(st.session_state.user_role)
+            # [UX Nudge] 권위적인 첫 메시지 + 키워드 넛지
+            initial_msg = f"""
+            **'{topic_input}'** 영토에 깃발을 꽂았습니다.
+
+            당신의 역할 **({role_data['persona']})**에 맞춰 지도를 그릴 시간입니다.
+
+            **[첫 번째 임무]**
+            <b>책이나 검색 없이, 이 주제에 대해 당신이 '확실히 아는' 키워드를 3~5개만 나열하십시오.</b> (예: 기술, 리스크, 투자)
+            """
+            
+            st.session_state.messages = [{"role":"assistant", "content":initial_msg}]
+            st.session_state.territory = {"known": [], "unknown": []}
+            st.rerun()
+
+# --- SCENE 3: CONQUEST (Map Building Logic) ---
+elif st.session_state.mode == "CONQUEST":
+    # 1. Knowledge Map Visualization
+    st.markdown(f"### 🗺️ Map of {st.session_state.topic}")
+    
+    with st.container(border=True):
+        k_list = st.session_state.territory['known']
+        u_list = st.session_state.territory['unknown']
+        
+        st.markdown("#### 🏰 정복한 땅 (Known Territory)")
+        if k_list: st.write(" ".join([f"<span class='territory-badge'>{k}</span>" for k in k_list]), unsafe_allow_html=True)
+        else: st.caption("아직 밝혀진 땅이 없습니다. 키워드를 말해주세요.")
+            
+        st.markdown("#### ☁️ 미지의 안개 (Fog of War)")
+        if u_list:
+            cols = st.columns(min(len(u_list), 4))
+            for i, u in enumerate(u_list):
+                if cols[i%4].button(f"🔍 {u} 탐험하기", key=f"explore_{u}"):
+                    st.session_state.messages.append({"role":"user", "content":f"'{u}'에 대해 더 알아서 내 지도를 넓히고 싶어. 이게 내가 아는 것들과 어떻게 연결돼?'"})
+                    st.session_state.messages.append({"role":"bot", "content":"Thinking... [AI Logic Filter Active]"}) # Fake Loading
+                    st.rerun()
+        else: st.caption("더 이상 탐험할 미지의 땅이 없습니다! 정복 완료.")
+    
+    st.divider()
+
+    # 2. Chat Interface
+    for msg in st.session_state.messages:
+        css = "user" if msg["role"] == "user" else "bot"
+        st.markdown(f"<div class='chat-message {css}'>{msg['content']}</div>", unsafe_allow_html=True)
+
+    if prompt := st.chat_input("아는 것을 설명하거나, 모르는 것을 물어보세요..."):
+        # 1. User Input Append + Fake Loading
+        st.session_state.messages.append({"role":"user", "content":prompt})
+        st.session_state.messages.append({"role":"bot", "content":"Thinking... [AI Logic Filter Active]"}) # Fake Loading
+        st.rerun()
+
+    # 3. AI Logic Execution
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "bot" and st.session_state.messages[-2]["role"] == "user":
+        
+        st.session_state.messages.pop() # remove fake message
+        
+        with st.chat_message("assistant"):
+            box = st.empty(); box.markdown("지도를 그리는 중...")
+            
+            # Dynamic System Prompt Call
+            role_data = get_persona_data(st.session_state.user_role)
+            sys_prompt = MAP_SYS_BASE.format(role_persona=role_data['persona'], instruction=role_data['instruction'])
+            user_prompt = f"Topic: {st.session_state.topic}. User Input: {st.session_state.messages[-1]['content']}. Current Known: {st.session_state.territory['known']}"
+
+            res = call_gemini(api_key, sys_prompt, user_prompt, st.session_state.auto_model)
+            
+            text = res.get('response', str(res))
+            box.markdown(f"<div class='chat-message bot'>{text}</div>", unsafe_allow_html=True)
+            st.session_state.messages.append({"role":"assistant", "content":text})
+            
+            # Map Update Logic
+            new_k = [k for k in res.get('known_keywords', []) if k]
+            new_u = [u for u in res.get('unknown_keywords', []) if u]
+            
+            st.session_state.territory['known'] = list(set(st.session_state.territory['known'] + new_k))
+            st.session_state.territory['unknown'] = list(set(st.session_state.territory['unknown'] + new_u) - set(st.session_state.territory['known']))
+            
+            if res.get('decision') == "CONQUERED":
+                st.balloons()
+                st.success("🎉 영토 정복 완료! 아티팩트를 생성합니다.")
+                st.session_state.mode = "ARTIFACT"
+            
+            if new_k or new_u or res.get('decision') == "CONQUERED": st.rerun() 
+
+# --- SCENE 4: ARTIFACT (Final Diploma Screen) ---
+elif st.session_state.mode == "ARTIFACT":
+    st.balloons()
+    st.markdown("<h1 style='text-align:center; color:#00E676;'>CONQUEST ARTIFACT DIPLOMA</h1>", unsafe_allow_html=True)
+    
+    if st.button("🏠 Home"): st.session_state.clear(); st.rerun()
