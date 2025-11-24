@@ -5,42 +5,47 @@ import time
 import random
 import sqlite3
 import pandas as pd
-import plotly.graph_objects as go # [New] 지도 시각화용
+import plotly.express as px
 from gtts import gTTS
 from io import BytesIO
 import re
-from datetime import datetime
+from datetime import datetime, date
 
 # ==========================================
-# [Layer 0] Config & Style
+# [Layer 0] Config & Design
 # ==========================================
-st.set_page_config(page_title="FeynmanTic V29", page_icon="🗺️", layout="wide")
+st.set_page_config(page_title="FeynmanTic V30", page_icon="🗺️", layout="wide")
 
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     .stApp { background-color: #0E1117; color: #E0E0E0; font-family: 'Pretendard', sans-serif; }
     
-    .map-container { background: #1F2428; border: 1px solid #30363D; border-radius: 15px; padding: 20px; margin-bottom: 20px; text-align: center; }
-    .territory-badge { background: #238636; color: white; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; }
+    /* Map & Conquest UI */
+    .map-container { background: #1F2428; border: 1px solid #30363D; border-radius: 15px; padding: 20px; margin-bottom: 20px; }
+    .territory-badge { background: #00E676; color: black; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; font-weight: bold; }
     .fog-badge { background: #333; color: #888; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; border: 1px dashed #555; }
     
-    .chat-message { padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem; line-height: 1.6; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .chat-message.user { background-color: #21262D; border-right: 4px solid #7C4DFF; text-align: right; }
-    .chat-message.bot { background-color: #161B22; border-left: 4px solid #00E676; }
+    /* Daily Mission */
+    .mission-card { background: #2D333B; border-left: 5px solid #FFD700; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+
+    /* Chat UI */
+    .chat-message { padding: 1.2rem; border-radius: 1rem; margin-bottom: 1rem; line-height: 1.6; }
+    .chat-message.user { background-color: #21262D; border-right: 4px solid #7C4DFF; text-align: right; margin-left: 15%; }
+    .chat-message.bot { background-color: #161B22; border-left: 4px solid #FF4B4B; font-family: 'Courier New', monospace; margin-right: 5%; }
     
-    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
-    .stTextInput input { background-color: #0d1117 !important; color: #fff !important; }
+    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; }
+    .stTextInput input { background-color: #0d1117 !important; color: #fff !important; border: 1px solid #30363d !important; }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# [Layer 1] Logic
+# [Layer 1] Logic & Core Engine
 # ==========================================
 def init_db():
-    conn = sqlite3.connect('feynmantic_v29.db', check_same_thread=False)
+    conn = sqlite3.connect('feynmantic_v30.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, topic TEXT, territory TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, topic TEXT, dialogue TEXT)''')
     conn.commit()
     conn.close()
 
@@ -48,11 +53,20 @@ def find_working_model(api_key):
     try:
         genai.configure(api_key=api_key)
         available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
+        priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
         for p in priority:
             for a in available:
                 if p in a: return a
-        return available[0] if available else None
+        return None
+    except: return None
+
+def generate_audio(text):
+    try:
+        sound_file = BytesIO()
+        tts = gTTS(text=text, lang='ko')
+        tts.write_to_fp(sound_file)
+        sound_file.seek(0)
+        return sound_file
     except: return None
 
 def extract_json(text):
@@ -65,125 +79,167 @@ def extract_json(text):
             else: return None
         except: return None
 
-# --- PROMPTS (Map Expansion Logic) ---
-# 퀴즈가 아니라 "네가 아는 키워드를 말해봐, 내가 연결해줄게" 방식
+# --- DYNAMIC PROMPTS ---
 MAP_SYS = """
-당신은 '지식의 지도 제작자(Cartographer)'입니다.
-사용자가 주제에 대해 아는 것들을 말하면, 그것이 '핵심 영토(Core Territory)'인지 '변방(Edge)'인지 판단하세요.
-그리고 사용자가 모르는(언급하지 않은) '미지의 땅(Fog of War)'이 무엇인지 지적하여 확장을 유도하세요.
+당신은 '{role}' 모드의 '지식의 지도 제작자'입니다.
+[지시]: 사용자의 답변을 분석하여, 'Known'과 'Unknown'을 구분하고 확장을 유도하십시오.
+[Known]: 사용자가 정확히 말했거나 깊이 이해한 키워드.
+[Unknown]: 사용자가 놓친 핵심 전제, 논리적 반대 개념, 또는 경계를 확장할 새로운 영역.
 
 [Output JSON]
-{
+{{
     "decision": "CONTINUE"|"CONQUERED",
-    "response": "피드백 (연결고리 질문)",
-    "known_keywords": ["사용자가 말한 핵심단어1", "단어2"],
-    "unknown_keywords": ["사용자가 놓친 핵심단어1", "단어2"] 
-}
+    "response": "피드백 및 다음 질문 (사용자 역할에 맞는 질문)",
+    "known_keywords": ["키워드1", "키워드2"],
+    "unknown_keywords": ["키워드1", "키워드2"] 
+}}
 """
-
-def call_gemini(api_key, sys, user, model_name):
-    try:
-        genai.configure(api_key=api_key)
-        config = {"response_mime_type": "application/json"} if "1.5" in model_name else {}
-        safety = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
-        
-        model = genai.GenerativeModel(model_name, system_instruction=sys, safety_settings=safety, generation_config=config)
-        final_prompt = f"{user}\n\n(Respond ONLY in JSON)" if "1.5" not in model_name else user
-        res = model.generate_content(final_prompt)
-        return extract_json(res.text)
-    except Exception as e: return {"decision": "FAIL", "response": f"Error: {e}"}
+DAILY_MISSION_SYS = """
+당신은 '일일 퀘스트 마스터'입니다. 오늘 날짜({today})를 기준으로, {role} 사용자가 해체할 만한 가장 흥미로운 주제 3개를 제시하세요.
+JSON 출력: {{ "missions": [ {{"title": "주제명", "reason": "왜 중요한가"}}, ... ] }}
+"""
 
 # ==========================================
 # [Layer 2] UI Flow
 # ==========================================
 init_db()
+
 if "mode" not in st.session_state: st.session_state.mode = "LANDING"
-if "messages" not in st.session_state: st.session_state.messages = []
 if "auto_model" not in st.session_state: st.session_state.auto_model = None
+if "user_role" not in st.session_state: st.session_state.user_role = None
+if "messages" not in st.session_state: st.session_state.messages = []
 if "territory" not in st.session_state: st.session_state.territory = {"known": [], "unknown": []}
+if "daily_missions" not in st.session_state: st.session_state.daily_missions = None
 
 with st.sidebar:
-    st.title("🗺️ FeynmanTic")
-    st.caption("V29 Conquest Edition")
+    st.title("⚡ FeynmanTic V30")
+    st.caption("Final Conquest Edition")
     api_key = st.text_input("Google API Key", type="password")
-    if api_key and st.button("🔄 Connect"):
-        found = find_working_model(api_key)
-        if found: st.session_state.auto_model = found; st.success("Connected")
-    st.divider()
-    if st.button("Reset"): st.session_state.clear(); st.rerun()
+    
+    if api_key and st.button("🔄 엔진 시동 (Connect)"):
+        with st.spinner("시스템 점검 중..."):
+            found = find_working_model(api_key)
+            if found: st.session_state.auto_model = found; st.success(f"Connected: {found}")
+            else: st.error("모델 연결 실패")
 
+    st.divider()
+    if st.button("🏠 메인으로 (Reset)"): st.session_state.clear(); st.rerun()
+    
 # --- SCENE 1: LANDING ---
 if st.session_state.mode == "LANDING":
-    st.markdown("<br><h1 style='text-align: center;'>BUILD YOUR MAP</h1><br>", unsafe_allow_html=True)
-    topic = st.text_input("정복할 영토(주제)를 입력하세요", placeholder="예: 비트코인, 피타고라스, 광합성...")
-    
-    if st.button("🚩 깃발 꽂기 (Start)"):
-        if not st.session_state.auto_model: st.error("키 연결 필요"); st.stop()
-        st.session_state.topic = topic
-        st.session_state.mode = "CONQUEST"
-        st.session_state.messages = [{"role":"assistant", "content":f"**'{topic}'** 영토에 깃발을 꽂았습니다.\n\n이 땅에 대해 **당신이 확실히 아는 것(키워드)**들을 나열해 보세요. 지도를 그려드리겠습니다."}]
-        st.rerun()
+    st.markdown("<br><h1 style='text-align: center;'>CHOOSE YOUR ROLE</h1><br>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    if c1.button("🎒 학생"): st.session_state.user_role = "SCHOOL"; st.session_state.mode = "HOME"; st.rerun()
+    if c2.button("🛡️ 직장인"): st.session_state.user_role = "PRO"; st.session_state.mode = "HOME"; st.rerun()
+    if c3.button("🌌 탐험가"): st.session_state.user_role = "EXPLORER"; st.session_state.mode = "HOME"; st.rerun()
 
-# --- SCENE 2: CONQUEST (Map Building) ---
+# --- SCENE 2: HOME (Daily Mission + Map) ---
+elif st.session_state.mode == "HOME":
+    role = st.session_state.user_role
+    st.markdown(f"## {role}의 작전실")
+    
+    if not st.session_state.auto_model:
+        st.warning("👈 엔진을 먼저 시동하세요.")
+    else:
+        # 1. Daily Mission Generation (유저가 뭘 할지 고민할 필요 없게)
+        if not st.session_state.daily_missions:
+            with st.spinner("오늘의 미션을 생성 중..."):
+                prompt = DAILY_MISSION_SYS.format(today=date.today(), role=role)
+                res = call_gemini(api_key, "Daily Planner", prompt, st.session_state.auto_model)
+                st.session_state.daily_missions = res.get('missions', [])
+
+        # 2. Mission Display
+        st.markdown("### 🔥 Daily Mission")
+        for mission in st.session_state.daily_missions:
+            st.markdown(f"""
+                <div class="mission-card">
+                    <b>{mission['title']}</b>
+                    <p style='font-size:0.8rem; color:#ccc;'>{mission['reason']}</p>
+                </div>
+            """, unsafe_allow_html=True)
+            if st.button(f"🚩 정복 시작: {mission['title']}", key=f"mission_{mission['title'][:5]}"):
+                st.session_state.topic = mission['title']
+                st.session_state.mode = "CONQUEST"
+                st.session_state.messages = [{"role":"assistant", "content":f"**'{mission['title']}'** 영토에 깃발을 꽂았습니다.\n\n이 땅에 대해 **당신이 아는 것(키워드)**들을 나열하여 지도를 그려보세요."}]
+                st.rerun()
+        
+        st.markdown("---")
+        # 3. Custom Topic
+        custom_topic = st.text_input("직접 영토를 입력하세요", placeholder="예: 양자역학, 마키아벨리즘...")
+        if st.button("🚩 Custom Topic 정복"):
+            if custom_topic:
+                st.session_state.topic = custom_topic
+                st.session_state.mode = "CONQUEST"
+                st.session_state.messages = [{"role":"assistant", "content":f"**'{custom_topic}'** 영토에 깃발을 꽂았습니다.\n\n이 땅에 대해 **당신이 아는 것(키워드)**들을 나열하여 지도를 그려보세요."}]
+                st.rerun()
+
+
+# --- SCENE 3: CONQUEST (Map Building) ---
 elif st.session_state.mode == "CONQUEST":
-    # [NEW] Knowledge Map Visualization
+    # 1. Knowledge Map Visualization (직관성 강화)
     st.markdown(f"### 🗺️ Map of {st.session_state.topic}")
     
-    # Map Display
-    with st.container():
+    with st.container(border=True):
         k_list = st.session_state.territory['known']
         u_list = st.session_state.territory['unknown']
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**🏰 정복한 땅 (Known)**")
-            if k_list:
-                for k in k_list: st.markdown(f"<span class='territory-badge'>{k}</span>", unsafe_allow_html=True)
-            else: st.caption("아직 밝혀진 땅이 없습니다.")
+        st.markdown("#### 🏰 정복한 땅 (Known Territory)")
+        if k_list:
+            st.write(" ".join([f"<span class='territory-badge'>{k}</span>" for k in k_list]), unsafe_allow_html=True)
+        else:
+            st.caption("아직 깃발을 꽂지 못했습니다.")
             
-        with col2:
-            st.markdown("**☁️ 미지의 안개 (Unknown)**")
-            if u_list:
-                for u in u_list: 
-                    if st.button(f"🔍 {u} 탐험하기"): # 클릭하면 바로 채팅으로 질문 입력
-                        st.session_state.messages.append({"role":"user", "content":f"나는 '{u}'에 대해 잘 몰라. 이게 내가 아는 것들과 어떻게 연결돼?"})
-                        st.rerun()
-            else: st.caption("탐색 중...")
+        st.markdown("#### ☁️ 미지의 안개 (Fog of War)")
+        if u_list:
+            cols = st.columns(min(len(u_list), 4))
+            for i, u in enumerate(u_list):
+                if cols[i%4].button(f"🔍 {u} 탐험하기", key=f"explore_{u}"):
+                    st.session_state.messages.append({"role":"user", "content":f"'{u}'에 대해 더 알고 싶어. 내가 아는 것({k_list})과 어떻게 연결돼?"})
+                    st.rerun()
+        else: st.caption("새로운 미지의 땅을 찾는 중입니다...")
     
     st.divider()
 
-    # Chat Interface
+    # 2. Chat Interface
     for msg in st.session_state.messages:
         css = "user" if msg["role"] == "user" else "bot"
         st.markdown(f"<div class='chat-message {css}'>{msg['content']}</div>", unsafe_allow_html=True)
 
     if prompt := st.chat_input("아는 것을 설명하거나, 모르는 것을 물어보세요..."):
+        # [Fix 1] UX 개선: Fake Loading Message
         st.session_state.messages.append({"role":"user", "content":prompt})
+        st.session_state.messages.append({"role":"bot", "content":"Thinking... [AI Logic Filter Active]"}) # Fake Message
         st.rerun()
 
-    if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    if st.session_state.messages and st.session_state.messages[-1]["role"] != "user" and st.session_state.messages[-2]["role"] == "user":
+        # AI Logic Trigger (after user input and fake loading)
+        
+        # remove fake message
+        st.session_state.messages.pop() 
+        
         with st.chat_message("assistant"):
             box = st.empty(); box.markdown("지도를 그리는 중...")
             
-            inst = f"Topic: {st.session_state.topic}. User Input: {st.session_state.messages[-1]['content']}. Current Known: {st.session_state.territory['known']}"
-            res = call_gemini(api_key, MAP_SYS, inst, st.session_state.auto_model)
+            # Use the refined System Prompt
+            sys_prompt = get_map_system_prompt(st.session_state.user_role, st.session_state.topic, st.session_state.territory['known'])
+            user_prompt = f"Topic: {st.session_state.topic}. User Input: {st.session_state.messages[-1]['content']}. Current Known: {st.session_state.territory['known']}"
+
+            res = call_gemini(api_key, sys_prompt, user_prompt, st.session_state.auto_model)
             
-            text = res.get('response', str(res))
+            text = res.get('response', "통신 오류: 다시 시도하세요.")
             box.markdown(f"<div class='chat-message bot'>{text}</div>", unsafe_allow_html=True)
             st.session_state.messages.append({"role":"assistant", "content":text})
             
-            # Update Map
+            # Map Update Logic
             new_k = res.get('known_keywords', [])
             new_u = res.get('unknown_keywords', [])
             
-            # 중복 제거 후 업데이트
             st.session_state.territory['known'] = list(set(st.session_state.territory['known'] + new_k))
-            # Unknown에서 Known으로 이동한 것 제거
             st.session_state.territory['unknown'] = list(set(st.session_state.territory['unknown'] + new_u) - set(st.session_state.territory['known']))
             
-            if new_k or new_u: st.rerun() # 지도 갱신을 위해 리로드
-
             if res.get('decision') == "CONQUERED":
                 st.balloons()
-                st.success("🎉 이 영토를 완전히 정복했습니다!")
-                if st.button("메인으로"): st.session_state.clear(); st.rerun()
+                st.success("🎉 이 영토를 완전히 정복했습니다! 메인으로 돌아갑니다.")
+                st.session_state.mode = "HOME"
+            
+            if new_k or new_u: st.rerun() # 지도 갱신을 위해 리로드
