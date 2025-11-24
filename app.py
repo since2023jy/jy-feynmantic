@@ -1,304 +1,347 @@
-import streamlit as st
-import google.generativeai as genai
-import json
-import time
-import random
-import sqlite3
-import pandas as pd
-import plotly.express as px
-from gtts import gTTS
-from io import BytesIO
-import re
-from datetime import datetime, date
+'use client';
 
-# ==========================================
-# [Layer 0] Config & Styles (Duolingo Aesthetic)
-# ==========================================
-st.set_page_config(page_title="FeynmanTic V37.5", page_icon="🧠", layout="wide")
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Brain, Rocket, Map, GitMerge, Stars, Zap, ShieldAlert, CheckCircle, Lock, CloudOff, BatteryCharging } from 'lucide-react';
 
-st.markdown("""
-    <style>
-    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-    .stApp { background-color: #0E1117; color: #E0E0E0; font-family: 'Pretendard', sans-serif; }
-    
-    /* Global Card Style */
-    .mode-card { background: #161B22; border: 1px solid #30363D; border-radius: 15px; padding: 25px; text-align: center; height: 180px; display: flex; flex-direction: column; justify-content: center; cursor: pointer; transition: 0.2s; }
-    .mode-card:hover { border-color: #00E676; background: #1F2428; transform: translateY(-5px); }
+type ViewMode = 'STUDENT' | 'PRO' | 'EXPLORER';
+type EntropyState = 'CHAOS' | 'PROCESSING' | 'CRYSTAL';
 
-    /* Chat UI (Simplified & High Contrast) */
-    .chat-message { padding: 1rem; border-radius: 1rem; margin-bottom: 1rem; line-height: 1.6; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .chat-message.user { background-color: #21262D; border-right: 4px solid #7C4DFF; text-align: right; margin-left: 15%; }
-    .chat-message.bot { background-color: #1F2428; border-left: 4px solid #FFD700; font-family: 'Courier New', monospace; margin-right: 5%; }
-    
-    /* Map Visualization */
-    .map-container { background: #1F2428; border: 1px solid #30363D; border-radius: 15px; padding: 20px; margin-bottom: 20px; }
-    .territory-badge { background: #00E676; color: black; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; font-weight: bold; }
-    .fog-badge { background: #333; color: #888; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem; margin: 5px; display: inline-block; border: 1px dashed #555; }
-    
-    /* Artifact / Final Screen - Diploma Style */
-    .final-diploma { 
-        background: linear-gradient(135deg, #1A472A 0%, #000000 100%); 
-        border: 3px solid #FFD700; /* Gold */
-        border-radius: 20px; 
-        padding: 40px; 
-        margin-top: 30px; 
-        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+interface ModeBtnProps {
+  label: string;
+  icon: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+  hardcore: boolean;
+}
+
+export default function FeynmanTicApp() {
+  const [viewMode, setViewMode] = useState<ViewMode>('STUDENT');
+  const [input, setInput] = useState('');
+  const [entropyState, setEntropyState] = useState<EntropyState>('CHAOS');
+  const [feedback, setFeedback] = useState('사고의 엔트로피가 높습니다.');
+  const [isHardcore, setIsHardcore] = useState(false);
+  const [isStorageAvailable, setIsStorageAvailable] = useState(true);
+  const [isVisible, setIsVisible] = useState(true);
+
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const safeLocalStorage = {
+    getItem: (key: string) => { try { return localStorage.getItem(key); } catch (e) { return null; } },
+    setItem: (key: string, value: string) => { try { localStorage.setItem(key, value); } catch (e) { setIsStorageAvailable(false); } },
+    removeItem: (key: string) => { try { localStorage.removeItem(key); } catch (e) { /* Ignore */ } }
+  };
+
+  useEffect(() => {
+    const savedThought = safeLocalStorage.getItem('feynman_draft');
+    if (savedThought) setInput(savedThought);
+
+    const savedMode = safeLocalStorage.getItem('feynman_mode');
+    if (savedMode === 'ruthless') {
+        setIsHardcore(true);
+        setFeedback('논리를 증명하십시오.');
     }
-    .final-diploma h1, .final-diploma h2 {
-        font-family: 'Georgia', serif;
+    
+    document.body.style.overscrollBehavior = 'none';
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'feynman_draft' && e.newValue !== null) {
+        setInput(e.newValue);
+        adjustHeight();
+      }
+      if (e.key === 'feynman_mode') {
+        const newMode = e.newValue === 'ruthless';
+        setIsHardcore(newMode);
+        setFeedback(newMode ? 'Ruthless Mode Activated' : 'Assistant Mode');
+      }
+    };
+
+    const handleVisibilityChange = () => setIsVisible(document.visibilityState === 'visible');
+
+    window.addEventListener('storage', handleStorageChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.body.style.overscrollBehavior = 'auto';
+      window.removeEventListener('storage', handleStorageChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const adjustHeight = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
     }
+  };
 
-    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; height: 3em; }
-    .stTextInput input { background-color: #0d1117 !important; color: #fff !important; border: 1px solid #30363d !important; }
-    </style>
-""", unsafe_allow_html=True)
+  useLayoutEffect(() => adjustHeight(), [input]);
 
-# ==========================================
-# [Layer 1] Logic & Core Functions
-# ==========================================
-def init_db():
-    conn = sqlite3.connect('feynmantic_v37_5.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, role TEXT, topic TEXT, dialogue TEXT)''')
-    conn.commit()
-    conn.close()
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setInput(val);
+    requestAnimationFrame(() => safeLocalStorage.setItem('feynman_draft', val));
+    if (entropyState === 'CRYSTAL') {
+        setEntropyState('CHAOS');
+        setFeedback(isHardcore ? '완벽해질 때까지 수정하십시오.' : '생각을 다듬고 계시군요.');
+    }
+  };
 
-def find_working_model(api_key):
-    try:
-        genai.configure(api_key=api_key)
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-        for p in priority:
-            for a in available:
-                if p in a: return a
-        return available[0] if available else None
-    except: return None
+  const toggleHardcoreMode = () => {
+    const nextMode = !isHardcore;
+    setIsHardcore(nextMode);
+    safeLocalStorage.setItem('feynman_mode', nextMode ? 'ruthless' : 'assistant');
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    setEntropyState('CHAOS');
+    setFeedback(nextMode ? '감당할 수 있겠습니까?' : '편하게 말씀하세요.');
+    setTimeout(() => textareaRef.current?.focus(), 10);
+  };
 
-def extract_json(text):
-    try:
-        return json.loads(text)
-    except:
-        try:
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if match: return json.loads(match.group())
-            else: return None
-        except: return None
+  const handleAnalyze = () => {
+    if (!input.replace(/\s/g, '').length || entropyState === 'PROCESSING') return;
+    if (timerRef.current) clearTimeout(timerRef.current);
 
-# --- DYNAMIC PROMPTS ---
-def get_persona_data(role):
-    # School level differentiation is now handled via instruction tone
-    if role == "SCHOOL":
-        return {"persona": "친절한 가정 교사", "instruction": "초등/중등 학생의 눈높이에 맞춰 '비유'와 개념의 전제 조건을 'Unknown'으로 제시하십시오."}
-    elif role == "PRO":
-        return {"persona": "냉철한 투자 심의 위원", "instruction": "비즈니스 결함, 규제 리스크, 수익성(ROI) 같은 실용적 결함을 'Unknown'으로 제시하여 공격하십시오."}
-    elif role == "EXPLORER":
-        return {"persona": "광장의 소크라테스", "instruction": "주제의 역사, 윤리, 철학적 맥락 같은 경계를 확장할 새로운 영역을 'Unknown'으로 제시하십시오."}
-    return {"persona": "일반 지도 제작자", "instruction": "일반적인 지식의 연결고리를 Unknown으로 제시하세요."}
+    setEntropyState('PROCESSING');
+    setFeedback("Processing Logic...");
 
-MAP_SYS_BASE = """
-[Role] 당신은 '{role_persona}' 모드의 '지식의 지도 제작자'입니다.
-[Directive] {instruction}
-[Output JSON]
-{{
-    "decision": "CONTINUE"|"CONQUERED",
-    "response": "피드백 및 다음 질문 (사용자 역할에 맞는 질문)",
-    "known_keywords": ["키워드1", "키워드2"],
-    "unknown_keywords": ["키워드1", "키워드2"] 
-}}
-"""
+    const dynamicDelay = Math.min(Math.max(input.length * 20, 1500), 4000);
 
-def call_gemini(api_key, sys, user, model_name, retry_count=0):
-    try:
-        genai.configure(api_key=api_key)
-        config = {"response_mime_type": "application/json"} if "1.5" in model_name else {}
-        safety = [{"category": cat, "threshold": "BLOCK_NONE"} for cat in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]]
-        
-        model = genai.GenerativeModel(model_name, system_instruction=sys, safety_settings=safety, generation_config=config)
-        final_prompt = f"{user}\n\n(Respond ONLY in JSON)" 
-        
-        res = model.generate_content(final_prompt)
-        parsed = extract_json(res.text)
-        
-        if parsed: return parsed
-        else:
-            if retry_count < 1:
-                time.sleep(1)
-                return call_gemini(api_key, sys, user, model_name, retry_count + 1)
-            else:
-                return {"decision": "FAIL", "response": f"JSON Parsing Failed. Raw Text: {res.text}"}
-            
-    except Exception as e:
-        return {"decision": "FAIL", "response": f"System Error: {e}"}
+    timerRef.current = setTimeout(() => {
+      setEntropyState('CRYSTAL');
+      setFeedback(isHardcore ? "결정체 획득. 논리가 견고합니다." : "아주 명확하게 정리되었습니다!");
+      timerRef.current = null;
+    }, dynamicDelay);
+  };
 
-# ==========================================
-# [Layer 2] UI & State Management
-# ==========================================
-init_db()
+  const reset = () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    setEntropyState('CHAOS');
+    setInput('');
+    safeLocalStorage.removeItem('feynman_draft'); 
+    setFeedback(isHardcore ? '다음 논리를 가져오십시오.' : '새로운 생각을 입력하세요.');
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (!isTouchDevice) setTimeout(() => textareaRef.current?.focus(), 10);
+  };
 
-# CRITICAL FIX: Initialize all required state variables
-if "mode" not in st.session_state: st.session_state.mode = "CONNECT"
-if "auto_model" not in st.session_state: st.session_state.auto_model = None
-if "user_role" not in st.session_state: st.session_state.user_role = None
-if "messages" not in st.session_state: st.session_state.messages = []
-if "territory" not in st.session_state: st.session_state.territory = {"known": [], "unknown": []}
-if "topic" not in st.session_state: st.session_state.topic = ""
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault(); 
+      if (e.nativeEvent.isComposing) return;
+      if (entropyState === 'CRYSTAL') { reset(); return; }
+      handleAnalyze();
+    }
+  };
 
-with st.sidebar:
-    st.title("⚡ FeynmanTic V37.5")
-    st.caption("Duolingo UX Integrated")
-    api_key = st.text_input("Google API Key", type="password")
-    
-    if api_key and st.button("🔄 엔진 시동 (Connect)"):
-        with st.spinner("시스템 점검 중..."):
-            found = find_working_model(api_key)
-            if found: 
-                st.session_state.auto_model = found
-                st.success(f"Connected: {found}")
-                if st.session_state.mode == "CONNECT": # Only switch if still on connect screen
-                     st.session_state.mode = "LANDING"
-            else: 
-                st.error("모델 연결 실패")
-    
-    if st.session_state.auto_model:
-        st.info(f"Engine: {st.session_state.auto_model.split('/')[-1]}")
-    
-    if st.button("Reset"): st.session_state.clear(); st.rerun()
+  return (
+    <div className="min-h-[100dvh] text-white flex flex-col overflow-hidden relative">
+      
+      {/* [Design Fix 1] 배경 레이어 크로스페이드 (부드러운 전환) */}
+      <div className={`absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900 via-slate-900 to-black transition-opacity duration-1000 ${isHardcore ? 'opacity-0' : 'opacity-100'}`} />
+      <div className={`absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-red-950 to-black transition-opacity duration-1000 ${isHardcore ? 'opacity-100' : 'opacity-0'}`} />
+      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.4)_100%)] z-0" />
 
-# --- SCENE 0: CONNECTION CHECK ---
-if st.session_state.mode == "CONNECT":
-    st.markdown("<h1 style='text-align: center;'>ENTER THE ARENA</h1><br>", unsafe_allow_html=True)
-    st.caption("API Key를 입력하고 엔진을 시동하십시오.")
-
-# --- SCENE 1: LANDING (Role Selection) ---
-elif st.session_state.mode == "LANDING":
-    st.markdown("<h1 style='text-align: center;'>CHOOSE YOUR UNIVERSE</h1><br>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    # Reruns directly to HOME for topic input
-    if c1.button("🎒 학생"): st.session_state.user_role = "SCHOOL"; st.session_state.mode = "HOME"; st.rerun()
-    if c2.button("🛡️ 직장인"): st.session_state.user_role = "PRO"; st.session_state.mode = "HOME"; st.rerun()
-    if c3.button("🌌 탐험가"): st.session_state.user_role = "EXPLORER"; st.session_state.mode = "HOME"; st.rerun()
-
-# --- SCENE 2: HOME (Topic Input & Initial Prompt) ---
-elif st.session_state.mode == "HOME":
-    role = st.session_state.user_role
-    st.markdown(f"## {role}의 작전실")
-    
-    topic_input = st.text_input("정복할 영토(주제)를 입력하세요", placeholder="예: 비트코인, 광합성...")
-    if st.button("🚩 깃발 꽂고 정복 시작"):
-        if topic_input:
-            st.session_state.topic = topic_input
-            st.session_state.mode = "CONQUEST"
-            
-            # --- CRITICAL UX NUDGE & AUTHORITY REINFORCEMENT ---
-            role_data = get_persona_data(st.session_state.user_role)
-            
-            # 넛지(Nudge) 예시 추가
-            nudge_example = " (예: '블록체인, 채굴, 지갑' 또는 '광합성, 엽록소, ATP')"
-            
-            initial_msg = f"""
-            **'{topic_input}'** 영토에 깃발을 꽂았습니다.
-
-            당신의 역할 **({role_data['persona']})**에 맞춰 지도를 그릴 시간입니다.
-
-            **[첫 번째 임무]**
-            **책이나 검색 없이, 이 주제에 대해 당신이 '확실히 아는' 키워드를 3~5개만 나열하십시오.**{nudge_example}
-            """
-            
-            st.session_state.messages = [{"role":"assistant", "content":initial_msg}]
-            st.session_state.territory = {"known": [], "unknown": []}
-            st.rerun()
-
-# --- SCENE 3: CONQUEST (Map Building Logic) ---
-elif st.session_state.mode == "CONQUEST":
-    # 1. Knowledge Map Visualization
-    st.markdown(f"### 🗺️ Map of {st.session_state.topic}")
-    
-    with st.container(border=True):
-        k_list = st.session_state.territory['known']
-        u_list = st.session_state.territory['unknown']
-        
-        st.markdown("#### 🏰 정복한 땅 (Known Territory)")
-        if k_list: st.write(" ".join([f"<span class='territory-badge'>{k}</span>" for k in k_list]), unsafe_allow_html=True)
-        else: st.caption("아직 밝혀진 땅이 없습니다. 키워드를 말해주세요.")
-            
-        st.markdown("#### ☁️ 미지의 안개 (Fog of War)")
-        if u_list:
-            cols = st.columns(min(len(u_list), 4))
-            for i, u in enumerate(u_list):
-                # 탐험하기 버튼을 누르면 해당 키워드로 질문을 던짐
-                if cols[i%4].button(f"🔍 {u} 탐험하기", key=f"explore_{u}"):
-                    # 유저 메시지 버퍼에 질문을 추가
-                    st.session_state.messages.append({"role":"user", "content":f"'{u}'에 대해 더 알아서 내 지도를 넓히고 싶어. 이게 내가 아는 것들과 어떻게 연결돼?'"})
-                    st.rerun() # AI Logic Execution으로 넘어가기 위해 리런
-        else: st.caption("더 이상 탐험할 미지의 땅이 없습니다! 정복 완료.")
-    
-    st.divider()
-
-    # 2. Chat Interface
-    for msg in st.session_state.messages:
-        css = "user" if msg["role"] == "user" else "bot"
-        st.markdown(f"<div class='chat-message {css}'>{msg['content']}</div>", unsafe_allow_html=True)
-
-    # 3. User Input
-    if prompt := st.chat_input("아는 것을 설명하거나, 모르는 것을 물어보세요..."):
-        st.session_state.messages.append({"role":"user", "content":prompt})
-        st.session_state.messages.append({"role":"bot", "content":"Thinking... [AI Logic Filter Active]"}) 
-        st.rerun()
-
-    # 4. AI Logic Execution (Triggered by Fake Loading)
-    # Note: 이 로직은 `messages` 배열의 길이에 의존하지 않고, 항상 마지막 두 메시지가 'user'와 'bot(thinking)'일 때만 실행됩니다.
-    if (len(st.session_state.messages) >= 2 and 
-        st.session_state.messages[-1]["role"] == "bot" and 
-        st.session_state.messages[-1]["content"].startswith("Thinking...")):
-        
-        st.session_state.messages.pop() # remove fake message
-        
-        with st.chat_message("assistant"):
-            box = st.empty(); box.markdown("지도를 그리는 중...")
-            
-            # Dynamic System Prompt Call
-            role_data = get_persona_data(st.session_state.user_role)
-            sys_prompt = MAP_SYS_BASE.format(role_persona=role_data['persona'], instruction=role_data['instruction'])
-            user_prompt = f"Topic: {st.session_state.topic}. User Input: {st.session_state.messages[-1]['content']}. Current Known: {st.session_state.territory['known']}"
-
-            res = call_gemini(api_key, sys_prompt, user_prompt, st.session_state.auto_model)
-            
-            text = res.get('response', str(res))
-            box.markdown(f"<div class='chat-message bot'>{text}</div>", unsafe_allow_html=True)
-            st.session_state.messages.append({"role":"assistant", "content":text})
-            
-            # Map Update Logic
-            new_k = [k for k in res.get('known_keywords', []) if k]
-            new_u = [u for u in res.get('unknown_keywords', []) if u]
-            
-            st.session_state.territory['known'] = list(set(st.session_state.territory['known'] + new_k))
-            st.session_state.territory['unknown'] = list(set(st.session_state.territory['unknown'] + new_u) - set(st.session_state.territory['known']))
-            
-            if res.get('decision') == "CONQUERED":
-                st.balloons()
-                st.success("🎉 영토 정복 완료! 아티팩트를 생성합니다.")
-                st.session_state.mode = "ARTIFACT"
-            
-            # Rerun to update the map visualization and remove the "thinking" chat element
-            if new_k or new_u or res.get('decision') == "CONQUERED": st.rerun() 
-
-# --- SCENE 4: ARTIFACT (Final Diploma Screen) ---
-elif st.session_state.mode == "ARTIFACT":
-    st.balloons()
-    
-    # Diplona UI/UX
-    st.markdown(f"""
-        <div class='final-diploma'>
-            <h1 style='color:#FFD700; text-align:center; font-size:3em;'>CONQUEST ARTIFACT DIPLOMA</h1>
-            <h2 style='text-align:center; color:#00E676;'>[Master of Metacognition]</h2>
-            <br>
-            <p style='text-align:center;'>본 증서는 사용자께서 'FeynmanTic System'을 통해</p>
-            <h3 style='text-align:center; color:#FFD700; font-size:2em;'>"{st.session_state.topic}"</h3>
-            <p style='text-align:center; font-size:1.1em;'>영토의 모든 **Known Territory**를 정복하고, **Fog of War**를 해제하였음을 증명합니다.</p>
-            <hr style='border-color:#333; margin: 20px 0;'>
-            <p style='font-size:0.9em; text-align:center; color:#aaa;'>발급일: {datetime.now().strftime('%Y년 %m월 %d일')}</p>
+      {/* Header */}
+      <header className="p-6 flex justify-between items-center border-b border-white/5 bg-white/5 backdrop-blur-md select-none relative z-50 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-lg bg-white/5 border border-white/10 transition-all duration-700 ${isHardcore ? "shadow-[0_0_20px_rgba(220,38,38,0.4)]" : "shadow-[0_0_20px_rgba(34,211,238,0.4)]"}`}>
+             <Brain className={`w-5 h-5 transition-colors duration-700 ${isHardcore ? "text-red-500" : "text-cyan-400"}`} />
+          </div>
+          <h1 className="text-lg font-bold tracking-[0.2em] font-mono text-white/90">
+            FEYNMANTIC
+          </h1>
         </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    if st.button("🏠 새로운 영토 탐험하기"): st.session_state.clear(); st.rerun()
+        
+        <div className="flex items-center gap-3 cursor-pointer group" onClick={toggleHardcoreMode}>
+            {!isStorageAvailable && <CloudOff size={14} className="text-yellow-500 animate-pulse" />}
+            {!isVisible && <BatteryCharging size={14} className="text-green-500" />}
+            
+            <div className="relative flex items-center bg-black/40 rounded-full p-1 border border-white/10 shadow-inner">
+                <span className={`text-[10px] font-bold px-2 transition-colors duration-500 ${!isHardcore ? 'text-cyan-400' : 'text-white/20'}`}>AST</span>
+                <div className={`w-8 h-4 rounded-full shadow-inner transition-colors duration-500 ${isHardcore ? 'bg-red-900/50' : 'bg-cyan-900/50'}`}>
+                    <motion.div 
+                        className={`w-4 h-4 rounded-full shadow-md ${isHardcore ? 'bg-red-500' : 'bg-cyan-400'}`}
+                        animate={{ x: isHardcore ? 16 : 0 }}
+                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                    />
+                </div>
+                <span className={`text-[10px] font-bold px-2 transition-colors duration-500 ${isHardcore ? 'text-red-500' : 'text-white/20'}`}>RTH</span>
+            </div>
+        </div>
+      </header>
+
+      <main className="container mx-auto p-4 max-w-4xl flex-1 flex flex-col justify-between relative z-10">
+        
+        {/* Visual Engine */}
+        {isVisible && (
+            <div className="flex-1 flex flex-col items-center justify-center relative min-h-[250px] pointer-events-none">
+                <AnimatePresence mode='wait'>
+                    {entropyState === 'CHAOS' && (
+                        <motion.div 
+                            key="chaos"
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ scale: [1, 1.1, 0.95], opacity: [0.4, 0.6, 0.4] }}
+                            exit={{ opacity: 0, scale: 0 }}
+                            transition={{ repeat: Infinity, duration: 5, ease: "easeInOut" }}
+                            className={`w-80 h-80 rounded-full absolute blur-[90px] transition-colors duration-1000 ${isHardcore ? 'bg-red-600/30' : 'bg-cyan-600/30'}`}
+                        />
+                    )}
+                    {entropyState === 'PROCESSING' && (
+                         <div className="relative">
+                            <motion.div 
+                                animate={{ rotate: 360 }}
+                                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                                className={`w-24 h-24 rounded-full border border-dashed ${isHardcore ? 'border-red-500/50' : 'border-cyan-400/50'}`}
+                            />
+                            <motion.div 
+                                animate={{ rotate: -360 }}
+                                transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                                className={`absolute inset-2 rounded-full border border-dotted ${isHardcore ? 'border-red-500/30' : 'border-cyan-400/30'}`}
+                            />
+                         </div>
+                    )}
+                    {entropyState === 'CRYSTAL' && (
+                        <motion.div 
+                            key="crystal"
+                            initial={{ scale: 0, rotate: -45, opacity: 0 }}
+                            animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                            transition={{ type: "spring", stiffness: 200, damping: 15 }}
+                            className="relative z-10"
+                        >
+                            <div className={`w-32 h-32 rotate-45 flex items-center justify-center backdrop-blur-xl border border-white/20 shadow-[0_0_50px_rgba(255,255,255,0.1)] ${isHardcore ? 'bg-red-500/10' : 'bg-cyan-500/10'}`}>
+                                <CheckCircle className={`w-12 h-12 ${isHardcore ? 'text-red-400' : 'text-cyan-400'}`} />
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+                
+                {/* [Design Fix 2] 살아 숨쉬는 텍스트 애니메이션 */}
+                <div className="mt-12 h-8 relative overflow-hidden flex items-center justify-center">
+                    <AnimatePresence mode='wait'>
+                        <motion.div 
+                            key={feedback}
+                            initial={{ y: 20, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            exit={{ y: -20, opacity: 0 }}
+                            transition={{ duration: 0.3 }}
+                            className={`px-6 py-2 rounded-full backdrop-blur-md border border-white/10 shadow-lg text-sm font-mono tracking-wide ${isHardcore ? 'bg-red-950/30 text-red-100 border-red-500/20' : 'bg-indigo-950/30 text-cyan-100 border-cyan-500/20'}`}
+                        >
+                            {feedback}
+                        </motion.div>
+                    </AnimatePresence>
+                </div>
+            </div>
+        )}
+
+        <div className="flex justify-center gap-4 mb-6 z-10 shrink-0">
+            <ModeBtn label="Student" icon={<Map size={14} />} active={viewMode === 'STUDENT'} onClick={() => setViewMode('STUDENT')} hardcore={isHardcore}/>
+            <ModeBtn label="Pro" icon={<GitMerge size={14} />} active={viewMode === 'PRO'} onClick={() => setViewMode('PRO')} hardcore={isHardcore}/>
+            <ModeBtn label="Explorer" icon={<Stars size={14} />} active={viewMode === 'EXPLORER'} onClick={() => setViewMode('EXPLORER')} hardcore={isHardcore}/>
+        </div>
+
+        <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-6 h-48 sm:h-64 border border-white/10 relative overflow-hidden mb-6 shadow-inner z-0 shrink-0 transition-colors duration-700 group">
+            <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/40 pointer-events-none" />
+            {viewMode === 'STUDENT' && <StudentView unlocked={entropyState === 'CRYSTAL'} />}
+            {viewMode === 'PRO' && <ProView warning={isHardcore && entropyState === 'CHAOS'} />}
+            {viewMode === 'EXPLORER' && <ExplorerView connected={entropyState === 'CRYSTAL'} hardcore={isHardcore} />}
+        </div>
+
+        <div className="relative w-full max-w-2xl mx-auto mb-0 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] z-20 shrink-0 group">
+            {/* [Design Fix 3] 반응형 빛(Glow) - focus-within일 때 빛이 더 강해짐 */}
+            <div className={`absolute -inset-0.5 rounded-3xl blur opacity-20 group-focus-within:opacity-50 transition-opacity duration-700 ${isHardcore ? 'bg-red-500' : 'bg-cyan-400'}`} />
+            
+            <textarea 
+                ref={textareaRef} 
+                value={input}
+                autoFocus 
+                rows={1}
+                onChange={handleInputChange} 
+                disabled={entropyState === 'PROCESSING'}
+                placeholder={isHardcore ? "논리를 증명하십시오..." : "생각을 입력하세요."}
+                className={`relative w-full bg-black/40 backdrop-blur-xl border border-white/10 rounded-3xl py-4 px-6 pr-14 text-[16px] text-white placeholder-white/30 focus:outline-none shadow-2xl tracking-wide transition-all duration-700 resize-none overflow-hidden ${isHardcore ? 'focus:border-red-500/50' : 'focus:border-cyan-400/50'}`}
+                onKeyDown={handleKeyDown}
+                style={{ minHeight: '60px' }}
+            />
+            <button 
+                onClick={entropyState === 'CRYSTAL' ? reset : handleAnalyze}
+                disabled={(!input.replace(/\s/g, '').length && entropyState !== 'CRYSTAL')}
+                className={`absolute right-3 top-3 p-2.5 rounded-full transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed ${
+                    entropyState === 'CRYSTAL' 
+                    ? 'bg-green-500 hover:bg-green-400 text-black shadow-[0_0_15px_rgba(34,197,94,0.6)]' 
+                    : isHardcore ? 'bg-red-600 hover:bg-red-500 text-white shadow-[0_0_15px_rgba(220,38,38,0.4)]' : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-[0_0_15px_rgba(8,145,178,0.4)]'
+                }`}
+            >
+                {entropyState === 'CRYSTAL' ? <Zap size={20} fill="currentColor" /> : <Rocket size={20} />}
+            </button>
+        </div>
+
+      </main>
+    </div>
+  );
+}
+
+function ModeBtn({ label, icon, active, onClick, hardcore }: any) {
+    return (
+        <button 
+            onClick={onClick}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold tracking-wider uppercase transition-all duration-300 border ${
+                active 
+                ? `bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.3)] scale-105` 
+                : `bg-transparent text-white/40 border-transparent hover:bg-white/5 hover:text-white`
+            }`}
+        >
+            {icon} {label}
+        </button>
+    )
+}
+
+function StudentView({ unlocked }: any) {
+    return (
+        <div className="flex items-center justify-around h-full select-none">
+            <div className="flex flex-col items-center">
+                <div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center mb-2 shadow-[0_0_15px_rgba(34,197,94,0.5)] text-black font-black text-lg">1</div>
+            </div>
+            <div className={`h-1 flex-1 mx-4 rounded-full ${unlocked ? 'bg-green-500/50' : 'bg-white/10'}`} />
+            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border transition-all duration-500 ${unlocked ? 'bg-white/10 border-white/50 text-white shadow-[0_0_30px_rgba(255,255,255,0.2)]' : 'bg-white/5 border-white/5 text-white/20'}`}>
+                {unlocked ? <span className="font-bold text-xl">2</span> : <Lock size={20}/>}
+            </div>
+            <div className="h-1 flex-1 mx-4 bg-white/10 rounded-full" />
+            <div className="w-12 h-12 border border-white/5 rounded-xl flex items-center justify-center text-white/10">3</div>
+        </div>
+    )
+}
+
+function ProView({ warning }: any) {
+    return (
+        <div className="flex flex-col items-center justify-center h-full gap-6 select-none opacity-80">
+            <div className="px-4 py-2 bg-white/5 rounded border border-white/10 text-xs font-mono">STRATEGY</div>
+            <div className="w-px h-8 bg-gradient-to-b from-white/20 to-transparent" />
+             <div className="flex gap-8">
+                <div className={`px-4 py-2 rounded border text-xs font-mono transition-all ${warning ? 'bg-red-500/10 border-red-500/50 text-red-200' : 'bg-white/5 border-white/10 text-white/40'}`}>
+                    {warning ? 'LOGIC ERROR' : 'MARKET'}
+                </div>
+                <div className="px-4 py-2 bg-white/5 rounded border border-white/10 text-xs font-mono text-white/40">TECH</div>
+            </div>
+        </div>
+    )
+}
+
+function ExplorerView({ connected, hardcore }: any) {
+    return (
+        <div className="h-full w-full relative opacity-80">
+             <div className="absolute top-1/4 left-1/4 w-1 h-1 bg-white rounded-full shadow-[0_0_10px_white]" />
+             <div className={`absolute top-1/2 left-1/2 w-3 h-3 rounded-full shadow-[0_0_20px_currentColor] z-10 ${hardcore ? 'bg-red-500 text-red-500' : 'bg-cyan-400 text-cyan-400'}`} />
+             
+             <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                 {connected && (
+                    <motion.line 
+                        x1="25%" y1="25%" x2="50%" y2="50%" 
+                        stroke="rgba(255,255,255,0.1)" strokeWidth="1"
+                        initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
+                    />
+                 )}
+             </svg>
+        </div>
+    )
+}
