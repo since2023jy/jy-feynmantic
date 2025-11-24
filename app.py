@@ -1,240 +1,230 @@
 import streamlit as st
-import google.generativeai as genai
 import json
-import time
 import random
+import time
+# (Gemini API는 이 환경에서 직접 연동되지 않으므로, 로직 판정은 로컬에서 시뮬레이션됩니다.)
 
 # -----------------------------------------------------------------------------
-# 1. VISUAL OVERHAUL (CSS INJECTION)
+# 1. Config & CSS (Syntax Error Fixed)
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Glitch Hunter: ZERO", page_icon="👾", layout="centered")
+st.set_page_config(layout="wide", page_title="FeynmanTic Glitch Hunter")
 
-# [Custom Font & Animation Loading]
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Black+Ops+One&display=swap');
+    /* 1. 기본 스타일 */
+    .stApp { background-color: #0d0d0d; color: #00ff41; font-family: monospace; }
+    .stButton>button { 
+        border: 2px solid #00ff41; background: #111; color: #00ff41; 
+        transition: 0.2s; /* 쫀득함 추가 */
+    }
+    .stButton>button:hover { background: #00ff41; color: #000; box-shadow: 0 0 10px #00ff41; }
 
-    /* 1. 전체 배경 및 CRT 효과 (레트로 해커 감성) */
-    .stApp {
-        background-color: #050505;
-        background-image: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-        background-size: 100% 2px, 3px 100%;
-        color: #00ff41;
-        font-family: 'Share Tech Mono', monospace;
-    }
-    
-    /* 화면 깜빡임(Rerun) 숨기기 위한 트릭 */
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stDeployButton {display:none;}
-    
-    /* 2. 타이틀 스타일링 (Glitch Effect) */
-    .hacker-header {
-        text-align: center; font-family: 'Black Ops One', cursive; font-size: 50px;
-        color: #fff; text-shadow: 2px 2px 0px #ff00de, -2px -2px 0px #00ff41;
-        animation: glitch-text 1s infinite linear alternate-reverse;
-        margin-bottom: 30px;
-    }
-    @keyframes glitch-text {
-        0% { transform: skew(0deg); }
-        20% { transform: skew(-2deg); }
-        40% { transform: skew(2deg); }
-        60% { transform: skew(0deg); }
-        80% { transform: skew(3deg); }
-        100% { transform: skew(0deg); }
-    }
-
-    /* 3. 섹터 카드 (Glassmorphism + Neon) */
+    /* 2. 섹터 카드 스타일 */
     .sector-card {
-        background: rgba(20, 20, 20, 0.7);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(0, 255, 65, 0.3);
-        border-radius: 15px;
-        padding: 20px;
-        margin-bottom: 15px;
-        transition: all 0.3s;
-        box-shadow: 0 0 10px rgba(0, 255, 65, 0.1);
-        position: relative; overflow: hidden;
+        padding: 20px; border-radius: 10px; margin-bottom: 15px; 
+        border-left: 5px solid; 
+        transition: 0.5s;
     }
-    .sector-card:hover { transform: translateY(-5px); box-shadow: 0 0 20px rgba(0, 255, 65, 0.4); border-color: #00ff41; }
-
-    /* 상태별 컬러 오버라이드 */
-    .state-BLACK { border-color: #444; color: #666; }
-    .state-GREY { border-color: #ff00de; box-shadow: 0 0 10px rgba(255, 0, 222, 0.2); animation: pulse-border 1.5s infinite; }
-    .state-LIGHT { border-color: #ffd700; box-shadow: 0 0 15px rgba(255, 215, 0, 0.3); }
-
-    /* 4. 버튼 커스텀 (Streamlit 버튼 못생김 해결) */
-    .stButton > button {
-        width: 100%;
-        border-radius: 0px;
-        border: 2px solid #00ff41;
-        background: transparent;
-        color: #00ff41;
-        font-family: 'Share Tech Mono', monospace;
-        font-size: 18px;
-        font-weight: bold;
-        transition: 0.2s;
-        text-transform: uppercase;
-        clip-path: polygon(10% 0, 100% 0, 100% 80%, 90% 100%, 0 100%, 0 20%);
-    }
-    .stButton > button:hover {
-        background: #00ff41;
-        color: #000;
-        box-shadow: 0 0 20px #00ff41;
-    }
-    .stButton > button:active { transform: scale(0.98); }
-
-    /* 5. 애니메이션 키프레임 */
-    @keyframes pulse-border { 0% { border-color: #555; } 50% { border-color: #ff00de; } 100% { border-color: #555; } }
-    
-    /* 6. 회로도 칩 스타일 */
-    .chip-box {
-        display: inline-block; padding: 5px 10px; margin: 3px; 
-        background: #111; border: 1px solid #333; color: #888; 
-        font-size: 14px; cursor: not-allowed;
-    }
-    .chip-active {
-        border-color: #00ff41; color: #00ff41; cursor: pointer;
-    }
-    .chip-active:hover { background: #00ff41; color: black; }
-    
-    .status-badge {
-        position: absolute; top: 0; right: 0; 
-        background: #00ff41; color: black; padding: 3px 10px; 
-        font-size: 12px; font-weight: bold;
-        clip-path: polygon(0 0, 100% 0, 100% 100%, 20% 100%);
-    }
-
+    .state-BLACK { border-color: #555; color: #666; background: #1a1a1a; }
+    .state-GREY { border-color: #ff00de; color: #ff00de; background: #221122; box-shadow: 0 0 15px rgba(255, 0, 222, 0.4); }
+    .state-LIGHT { border-color: #ffd700; color: #ffd700; background: #222010; box-shadow: 0 0 15px rgba(255, 215, 0, 0.4); }
 </style>
 """, unsafe_allow_html=True)
 
-# API Setup
-try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
-except:
-    pass
-
 # -----------------------------------------------------------------------------
-# 2. STATE & DATA
+# 2. State & Data Structure
 # -----------------------------------------------------------------------------
 if "sectors" not in st.session_state:
     st.session_state.sectors = {
-        "Def": {"name": "Protocol: DEFINE", "desc": "개념 정의 및 본질 파악", "state": "BLACK"}, 
-        "Ing": {"name": "Protocol: SYNTHESIS", "desc": "재료 합성 및 반응식", "state": "BLACK"}, 
-        "Imp": {"name": "Protocol: CAUSALITY", "desc": "인과 관계 및 영향력", "state": "BLACK"},
+        "Def": {"name": "01_정의 프로토콜", "desc": "광합성의 본질적 정의", "state": "BLACK"}, # BLACK -> GREY -> LIGHT
+        "Ing": {"name": "02_재료 프로토콜", "desc": "필요 요소 3가지", "state": "BLACK"},
+        "Imp": {"name": "03_인과 프로토콜", "desc": "생명 유지의 영향력", "state": "BLACK"},
     }
 if "view" not in st.session_state: st.session_state.view = "MAP"
-if "buffer" not in st.session_state: st.session_state.buffer = []
+if "buffer" not in st.session_state: st.session_state.buffer = [] 
 if "curr_sector" not in st.session_state: st.session_state.curr_sector = None
-if "glitch_shards" not in st.session_state: st.session_state.glitch_shards = []
+if "glitch_shards" not in st.session_state: st.session_state.glitch_shards = [] 
+if "feedback_msg" not in st.session_state: st.session_state.feedback_msg = "시스템 온라인."
 
+# [핵심 로직 데이터] 한국어 키워드로 변경 및 통일
 KEYWORD_MAP = {
-    "Def": {"pool": ["SOLAR_ENERGY", "GLUCOSE", "SYNTHESIS", "FIRE", "DIGESTION", "DECAY"], "ans": {"SOLAR_ENERGY", "GLUCOSE", "SYNTHESIS"}},
-    "Ing": {"pool": ["H2O", "CO2", "PHOTON", "SALT", "ROCK", "VOLT"], "ans": {"H2O", "CO2", "PHOTON"}},
-    "Imp": {"pool": ["OXYGEN", "ECOSYSTEM", "BREATH", "COLD", "TOXIN"], "ans": {"OXYGEN", "ECOSYSTEM", "BREATH"}}
+    "Def": {"pool": ["빛에너지", "포도당", "합성", "연소", "소화", "흙"], "ans": {"빛에너지", "포도당", "합성"}},
+    "Ing": {"pool": ["물", "이산화탄소", "빛", "소금", "전기", "바람"], "ans": {"물", "이산화탄소", "빛"}},
+    "Imp": {"pool": ["산소", "호흡", "생태계", "수면", "독소", "자동차"], "ans": {"산소", "호흡", "생태계"}}
 }
 
 # -----------------------------------------------------------------------------
-# 3. VIEW CONTROLLER
+# 3. Logic Functions
 # -----------------------------------------------------------------------------
 
-# [SCENE 1: MAP DASHBOARD]
-if st.session_state.view == "MAP":
-    st.markdown("<div class='hacker-header'>GLITCH HUNTER v0.9</div>", unsafe_allow_html=True)
+def go_map():
+    """맵 화면으로 돌아가며 버퍼를 비웁니다."""
+    st.session_state.view = "MAP"
+    st.session_state.buffer = []
+    st.session_state.curr_sector = None
+
+def start_debug(sid):
+    """디버깅(키워드 연결) 화면으로 진입합니다."""
+    st.session_state.curr_sector = sid
+    st.session_state.view = "LINK"
+    st.session_state.buffer = []
+
+def select_chip(word):
+    """키워드 칩을 선택 버퍼에 추가합니다."""
+    if len(st.session_state.buffer) < 3 and word not in st.session_state.buffer:
+        st.session_state.buffer.append(word)
+
+def remove_chip(word):
+    """키워드 칩을 선택 버퍼에서 제거합니다."""
+    if word in st.session_state.buffer:
+        st.session_state.buffer.remove(word)
+
+def compile_logic():
+    """핵심 로직: 키워드 연결 결과를 판정합니다."""
+    sid = st.session_state.curr_sector
+    user_set = set(st.session_state.buffer)
+    ans_set = KEYWORD_MAP[sid]['ans']
     
-    # Dashboard Grid
-    for sid, data in st.session_state.sectors.items():
-        state_cls = f"state-{data['state']}"
-        status_text = "LOCKED"
-        if data['state'] == "GREY": status_text = "UNSTABLE"
-        elif data['state'] == "LIGHT": status_text = "SECURE"
-        
-        # HTML Card Render
-        st.markdown(f"""
-        <div class='sector-card {state_cls}'>
-            <div class='status-badge' style='background-color: {"#555" if data["state"]=="BLACK" else "#ff00de" if data["state"]=="GREY" else "#ffd700"}'>{status_text}</div>
-            <h2 style='margin:0; font-size:24px;'>{data['name']}</h2>
-            <p style='margin:5px 0 15px 0; font-size:14px; opacity:0.8;'>{data['desc']}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Action Buttons (Streamlit Native)
-        c1, c2, c3 = st.columns([1, 4, 1])
-        with c2:
-            if data['state'] == "BLACK":
-                if st.button(f"🚀 INITIATE HACK ({sid})", key=f"btn_{sid}"):
-                    st.session_state.curr_sector = sid
-                    st.session_state.sectors[sid]['state'] = "GREY"
-                    st.session_state.view = "LINK"
-                    st.rerun()
-            elif data['state'] == "GREY":
-                if st.button(f"⚡ STABILIZE ({sid})", key=f"btn_{sid}"):
-                    st.session_state.curr_sector = sid
-                    st.session_state.view = "LINK"
-                    st.rerun()
-            elif data['state'] == "LIGHT":
-                st.markdown("<div style='text-align:center; color:#ffd700; font-weight:bold;'>ACCESS GRANTED</div>", unsafe_allow_html=True)
+    match_count = len(user_set.intersection(ans_set))
+    
+    # 0.5초 딜레이 (UI 깜빡임 연출)
+    time.sleep(0.5)
 
-    # Glitch Vault Teaser
-    if len(st.session_state.glitch_shards) > 0:
-        st.error(f"⚠️ DETECTED GLITCH SHARDS: {len(st.session_state.glitch_shards)}")
+    if match_count == 3:
+        # 성공: GREY -> LIGHT
+        st.session_state.sectors[sid]['state'] = "LIGHT"
+        st.session_state.feedback_msg = f"✅ 시스템 복구 완료! ({st.session_state.sectors[sid]['name']})"
+        st.balloons()
+        go_map()
+    else:
+        # 실패: GREY -> BLACK (루프 발생)
+        # 1. 오답 파편 생성
+        wrong_answers = list(user_set - ans_set)
+        if wrong_answers:
+             st.session_state.glitch_shards.append({
+                "sector": sid,
+                "wrong": wrong_answers,
+                "reason": f"{match_count}/3개 일치. 입력값: {', '.join(wrong_answers)}가 잘못됨.",
+                "timestamp": time.time()
+            })
+        
+        # 2. 강등 및 피드백 (다음 리로드 때 출력)
+        st.session_state.sectors[sid]['state'] = "BLACK"
+        st.session_state.feedback_msg = f"💥 FATAL ERROR! 데이터 붕괴. (오답 파편 획득!)"
+        go_map()
 
-# [SCENE 2: LINK GAME]
+
+def init_sector_action(sid):
+    """맵에서 섹터를 클릭했을 때의 액션 (O/X 단계를 생략하고 바로 GREY로 만듦)"""
+    state = st.session_state.sectors[sid]['state']
+    if state == "BLACK":
+        st.session_state.sectors[sid]['state'] = "GREY"
+        st.session_state.feedback_msg = f"⚡ {st.session_state.sectors[sid]['name']} 활성화! (UNSTABLE)"
+    elif state == "GREY":
+        start_debug(sid)
+    st.rerun() # 상태가 바뀌었으므로 리렌더링
+
+# -----------------------------------------------------------------------------
+# 4. UI Rendering
+# -----------------------------------------------------------------------------
+
+st.header("GLITCH HUNTER v1.1 (Final Prototype)")
+st.caption(st.session_state.feedback_msg)
+st.markdown("---")
+
+
+# --- 사이드바 (Glitch Vault) ---
+with st.sidebar:
+    st.header("🎒 GLITCH VAULT")
+    
+    if st.session_state.glitch_shards:
+        st.info(f"수집된 오답 파편: {len(st.session_state.glitch_shards)}개")
+        for i, shard in enumerate(st.session_state.glitch_shards):
+            with st.expander(f"💥 파편 #{i+1} [{shard['sector']}]"):
+                st.write(f"입력 오류: {', '.join(shard['wrong'])}")
+                st.caption(f"시스템 로그: {shard['reason']}")
+    else:
+        st.info("수집된 오답 파편이 없습니다.")
+
+
+# --- Scene: MAP ---
+if st.session_state.view == "MAP":
+    st.subheader("🗺️ NEURAL MAP STATUS")
+    
+    cols = st.columns(3)
+    keys = list(st.session_state.sectors.keys())
+    
+    for i, sid in enumerate(keys):
+        data = st.session_state.sectors[sid]
+        
+        status_color = "black"
+        status_label = "LOCKED"
+        
+        if data['state'] == "GREY": status_color = "pink"; status_label = "UNSTABLE"
+        elif data['state'] == "LIGHT": status_color = "gold"; status_label = "SECURE"
+        
+        with cols[i]:
+            # CSS를 활용한 섹터 카드 디자인
+            st.markdown(f"""
+            <div class='sector-card state-{data['state']}'>
+                <h3 style='margin:0; font-size:18px;'>{data['name']}</h3>
+                <p style='font-size:12px; margin-top:5px; color:{status_color};'>[{status_label}]</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 액션 버튼
+            btn_label = "⚡ STABILIZE" if data['state'] == "GREY" else "🔓 ACTIVATE"
+            btn_disabled = data['state'] == "LIGHT"
+            
+            # 상태 변경 로직을 on_click에 연결
+            if st.button(btn_label, key=f"action_{sid}", disabled=btn_disabled, use_container_width=True, on_click=init_sector_action, args=(sid,)):
+                pass
+
+
+# --- Scene: LINK GAME (핵심 루프) ---
 elif st.session_state.view == "LINK":
     sid = st.session_state.curr_sector
-    sec = st.session_state.sectors[sid]
+    data = st.session_state.sectors[sid]
     pool = KEYWORD_MAP[sid]['pool']
+    random.shuffle(pool) 
     
-    st.markdown(f"<div class='hacker-header' style='font-size:30px; margin-bottom:10px;'>{sec['name']}</div>", unsafe_allow_html=True)
-    st.info("CONNECT 3 CORE MODULES TO STABILIZE")
+    st.subheader(f"🔗 DEBUG: {data['name']}")
+    st.warning("경고: 올바른 핵심 키워드 3개를 연결해야 합니다. 실패 시 초기화됩니다.")
     
-    # 1. Visual Buffer (The Slot)
-    st.markdown("### ■ ACTIVE MODULES")
+    # 1. 조합 슬롯 시각화
+    st.markdown("### 🛠️ 논리 회로 슬롯")
+    slot_html = "<div style='display:flex; gap:10px;'>"
     
-    slot_html = "<div style='display:flex; gap:10px; margin-bottom:20px; justify-content:center;'>"
-    for item in st.session_state.buffer:
-        slot_html += f"<div style='border:2px solid #00ff41; padding:10px; color:#00ff41; font-weight:bold; box-shadow:0 0 10px #00ff41;'>{item}</div>"
-    for _ in range(3 - len(st.session_state.buffer)):
-         slot_html += f"<div style='border:2px dashed #444; padding:10px; color:#444; min-width:80px; text-align:center;'>EMPTY</div>"
+    for i in range(3):
+        item = st.session_state.buffer[i] if i < len(st.session_state.buffer) else "EMPTY"
+        color = "#00ff41" if item != "EMPTY" else "#444"
+        slot_html += f"<div style='flex:1; padding:10px; border:2px dashed {color}; text-align:center; color:{color}; font-size:14px;'>{item}</div>"
+    
     slot_html += "</div>"
     st.markdown(slot_html, unsafe_allow_html=True)
-    
-    # 2. Controls
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("❌ FLUSH BUFFER"):
-            st.session_state.buffer = []
-            st.rerun()
-    with c2:
-        can_run = len(st.session_state.buffer) == 3
-        if st.button("🔥 EXECUTE", type="primary", disabled=not can_run):
-            user_set = set(st.session_state.buffer)
-            ans_set = KEYWORD_MAP[sid]['ans']
-            
-            if user_set == ans_set:
-                st.balloons()
-                st.success("SYSTEM RESTORED.")
-                st.session_state.sectors[sid]['state'] = "LIGHT"
-                time.sleep(1.5)
-                st.session_state.buffer = []
-                st.session_state.view = "MAP"
-            else:
-                st.error("FATAL ERROR. GLITCH CREATED.")
-                st.session_state.sectors[sid]['state'] = "BLACK"
-                st.session_state.glitch_shards.append({"sid": sid, "wrong": list(user_set)})
-                time.sleep(1.5)
-                st.session_state.buffer = []
-                st.session_state.view = "MAP"
-            st.rerun()
-            
-    # 3. Chip Selection
-    st.markdown("### ■ AVAILABLE DATA")
+    st.markdown("---")
+
+    # 2. 키워드 선택 풀
+    st.subheader("🧩 사용 가능한 키워드 (클릭하여 슬롯에 삽입)")
     cols = st.columns(3)
     for i, word in enumerate(pool):
-        with cols[i%3]:
-            # Streamlit 버튼 디자인 오버라이드 됨
-            disabled = word in st.session_state.buffer or len(st.session_state.buffer) >= 3
-            if st.button(word, key=f"chip_{i}", disabled=disabled):
-                st.session_state.buffer.append(word)
-                st.rerun()
+        with cols[i % 3]:
+            is_selected = word in st.session_state.buffer
+            
+            if is_selected:
+                # 선택된 키워드는 제거 버튼으로 작동
+                if st.button(word, key=f"chip_{i}", use_container_width=True, on_click=remove_chip, args=(word,)):
+                    pass
+            else:
+                # 미선택 키워드는 추가 버튼으로 작동
+                if st.button(word, key=f"chip_{i}", use_container_width=True, disabled=len(st.session_state.buffer) >= 3, on_click=select_chip, args=(word,)):
+                    pass
+
+    st.markdown("---")
+    
+    # 3. 실행 및 복귀 버튼
+    can_compile = len(st.session_state.buffer) == 3
+    
+    st.button("🔥 COMPILE & RUN", disabled=not can_compile, on_click=compile_logic, use_container_width=True)
+    st.button("🔙 MAP으로 돌아가기", on_click=go_map, use_container_width=True)
+
