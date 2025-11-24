@@ -2,7 +2,8 @@ import streamlit as st
 import time
 import html
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List, Dict
 import streamlit.components.v1 as components
 
 # ==========================================
@@ -10,16 +11,65 @@ import streamlit.components.v1 as components
 # ==========================================
 @dataclass(frozen=True)
 class AppConfig:
-    VERSION = "13.0.0 (Feature Complete)"
+    VERSION = "14.0.0 (Live Logic)"
     MAX_CHARS = 5000
-    STORAGE_KEY = "feynman_v13_data"
+    STORAGE_KEY = "feynman_v14_data"
     COLOR_RUTHLESS = "#ff4545"
     COLOR_ASSISTANT = "#00f2ff"
     BG_RUTHLESS = "radial-gradient(circle at 50% 0%, #450a0a 0%, #020617 60%, #000000 100%)"
     BG_ASSISTANT = "radial-gradient(circle at 50% 0%, #0e4a5a 0%, #020617 60%, #000000 100%)"
 
 # ==========================================
-# 2. SYSTEM SETUP
+# 2. LOGIC ENGINE (The Brain)
+# ==========================================
+class LogicEngine:
+    """입력값을 분석하여 시각화 상태를 결정하는 가상의 뇌"""
+    
+    @staticmethod
+    def analyze(text: str, mode: str) -> Dict:
+        # 입력 텍스트 길이와 키워드에 따라 결과가 달라짐
+        length = len(text)
+        keywords = text.lower()
+        
+        result = {
+            "score": min(length // 5, 100),  # 길이에 비례한 점수
+            "stage": 1,
+            "active_nodes": [],
+            "stars": [],
+            "feedback": ""
+        }
+
+        # 1. Student Mode Logic (Mario Map)
+        if length > 100: result["stage"] = 3
+        elif length > 50: result["stage"] = 2
+        else: result["stage"] = 1
+
+        # 2. Pro Mode Logic (Tech Tree)
+        # 키워드에 따라 트리가 켜짐
+        if "돈" in keywords or "money" in keywords or "매출" in keywords:
+            result["active_nodes"].append("Sales")
+        if "코딩" in keywords or "code" in keywords or "개발" in keywords:
+            result["active_nodes"].append("Tech")
+        if "사람" in keywords or "user" in keywords:
+            result["active_nodes"].append("Product")
+            
+        # 3. Explorer Mode Logic (Galaxy)
+        # 입력 길이만큼 별 생성
+        num_stars = min(length // 10, 20)
+        result["stars"] = [{"x": random.randint(10, 90), "y": random.randint(10, 90), "size": random.randint(2, 6)} for _ in range(num_stars)]
+
+        # 4. Feedback Generation
+        if mode == "ruthless":
+            if length < 20: result["feedback"] = "논리가 빈약합니다. 더 구체적으로 서술하십시오."
+            else: result["feedback"] = "가설이 검증되었습니다. 논리적 구조가 견고합니다."
+        else:
+            if length < 20: result["feedback"] = "좋은 시작이에요! 조금 더 자세히 적어볼까요?"
+            else: result["feedback"] = "아주 훌륭한 생각입니다! 명확하게 정리되었어요."
+            
+        return result
+
+# ==========================================
+# 3. SYSTEM SETUP
 # ==========================================
 st.set_page_config(
     page_title="FeynmanTic",
@@ -35,8 +85,14 @@ def init_state():
         'is_hardcore': st.query_params.get("mode") == "ruthless",
         'feedback': "AWAITING INPUT...",
         'input_text': "",
-        'student_level': 'University', # [New] 학생 레벨
-        'is_spectator': False,         # [New] 관중 모드
+        'analysis_result': {  # [New] 분석 결과 저장소
+            "stage": 1, 
+            "active_nodes": [], 
+            "stars": [], 
+            "score": 0 
+        },
+        'student_level': 'High School',
+        'is_spectator': False
     }
     for k, v in defaults.items():
         if k not in st.session_state: st.session_state[k] = v
@@ -44,149 +100,147 @@ def init_state():
 init_state()
 
 # ==========================================
-# 3. DESIGN SYSTEM (CSS)
+# 4. DYNAMIC CSS GENERATOR
 # ==========================================
-@st.cache_data(show_spinner=False)
-def get_css(is_hardcore: bool) -> str:
+def get_css(is_hardcore: bool, result: Dict) -> str:
     primary = AppConfig.COLOR_RUTHLESS if is_hardcore else AppConfig.COLOR_ASSISTANT
     bg = AppConfig.BG_RUTHLESS if is_hardcore else AppConfig.BG_ASSISTANT
     
+    # [Dynamic] Mario Map Styling based on Stage
+    stage = result.get("stage", 1)
+    node_1_bg = primary if stage >= 1 else "rgba(255,255,255,0.1)"
+    node_2_bg = primary if stage >= 2 else "rgba(255,255,255,0.1)"
+    node_3_bg = primary if stage >= 3 else "rgba(255,255,255,0.1)"
+    
+    # [Dynamic] Tech Tree Styling
+    active_nodes = result.get("active_nodes", [])
+    sales_border = primary if "Sales" in active_nodes else "rgba(255,255,255,0.2)"
+    tech_border = primary if "Tech" in active_nodes else "rgba(255,255,255,0.2)"
+    prod_border = primary if "Product" in active_nodes else "rgba(255,255,255,0.2)"
+
     return f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600&display=swap');
-    
     :root {{ --primary: {primary}; --bg-gradient: {bg}; }}
-
+    
     html, body {{ background-color: #000000 !important; overscroll-behavior: none; }}
     .stApp {{ background: var(--bg-gradient); background-attachment: fixed; min-height: 100dvh; }}
     #MainMenu, header, footer, div[data-testid="stDecoration"] {{ display: none !important; }}
 
-    /* Typography */
-    h1, h2, .mono {{ font-family: 'JetBrains Mono', monospace !important; letter-spacing: -0.03em; }}
-    p, textarea, button, div {{ font-family: 'Inter', sans-serif !important; letter-spacing: 0.01em; }}
+    /* Mario Map Nodes */
+    .node-1 {{ background: {node_1_bg}; box-shadow: 0 0 15px {node_1_bg}; }}
+    .node-2 {{ background: {node_2_bg}; box-shadow: 0 0 15px {node_2_bg}; }}
+    .node-3 {{ background: {node_3_bg}; box-shadow: 0 0 15px {node_3_bg}; }}
+    
+    /* Tech Tree Nodes */
+    .tree-sales {{ border-color: {sales_border} !important; color: {sales_border} !important; }}
+    .tree-tech {{ border-color: {tech_border} !important; color: {tech_border} !important; }}
+    .tree-prod {{ border-color: {prod_border} !important; color: {prod_border} !important; }}
 
-    /* Input Area */
+    /* Common UI */
+    h1, h2, .mono {{ font-family: 'JetBrains Mono', monospace !important; }}
+    p, textarea, button, div {{ font-family: 'Inter', sans-serif !important; }}
+    
     .stTextArea textarea {{
-        background-color: rgba(20, 20, 20, 0.4) !important;
-        color: #fff !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 16px !important;
-        backdrop-filter: blur(20px);
-        padding: 1.5rem !important;
-        font-size: 16px !important;
-        resize: none !important;
-        min-height: 140px !important;
-        caret-color: var(--primary);
-        transition: all 0.3s ease;
+        background-color: rgba(20, 20, 20, 0.4) !important; color: #fff !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important; border-radius: 16px;
+        backdrop-filter: blur(20px); padding: 1.5rem; font-size: 16px; resize: none; min-height: 140px;
+        caret-color: var(--primary); transition: all 0.3s ease;
     }}
-    .stTextArea textarea:focus {{
-        border-color: var(--primary) !important;
-        box-shadow: 0 0 30px rgba({primary}, 0.2) !important;
-    }}
+    .stTextArea textarea:focus {{ border-color: var(--primary) !important; box-shadow: 0 0 30px rgba({primary}, 0.2) !important; }}
 
-    /* Buttons */
     div.stButton > button {{
-        width: 100%; height: 56px; border-radius: 14px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 100%);
-        border: 1px solid rgba(255,255,255,0.1);
-        color: var(--primary); font-family: 'JetBrains Mono', monospace !important; font-weight: 700;
+        width: 100%; height: 56px; border-radius: 14px; background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 100%);
+        border: 1px solid rgba(255,255,255,0.1); color: var(--primary); font-family: 'JetBrains Mono', monospace !important; font-weight: 700;
         transition: all 0.2s; margin-top: 10px;
     }}
     div.stButton > button:hover {{ border-color: var(--primary); transform: translateY(-2px); }}
-    div.stButton > button:active {{ transform: scale(0.98); }}
 
-    /* [New] Visual Map Styles (Mario/Tree) */
-    .map-node {{
-        width: 40px; height: 40px; border-radius: 50%; 
-        background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2);
-        display: flex; align-items: center; justify-content: center;
-        font-weight: bold; color: white; position: relative; z-index: 2;
-        transition: all 0.5s ease;
-    }}
-    .map-node.active {{ background: var(--primary); border-color: white; box-shadow: 0 0 20px var(--primary); color: black; }}
-    .map-line {{ position: absolute; background: rgba(255,255,255,0.1); z-index: 1; }}
-    
-    /* HUD */
     .hud-box {{
         background: rgba(10, 10, 10, 0.6); border: 1px solid rgba(255,255,255,0.08); border-left: 3px solid var(--primary);
-        padding: 1rem 1.5rem; border-radius: 12px; color: var(--primary);
-        font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;
+        padding: 1rem 1.5rem; border-radius: 12px; color: var(--primary); font-family: 'JetBrains Mono';
         backdrop-filter: blur(15px); min-height: 60px; display: flex; align-items: center; gap: 12px;
     }}
-
-    .block-container {{ padding-top: 3rem; padding-bottom: 5rem; max-width: 680px; }}
     
-    /* [New] Spectator Mode Overlay */
+    .map-container {{ display: flex; justify-content: space-between; position: relative; padding: 20px; margin-top: 20px; }}
+    .map-line {{ position: absolute; top: 50%; left: 10%; width: 80%; height: 2px; background: rgba(255,255,255,0.1); z-index: 0; }}
+    .map-circle {{ width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; z-index: 1; transition: all 0.5s; color: white; font-weight: bold; }}
+
     .spectator-overlay {{
-        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: rgba(0,0,0,0.8); z-index: 999; pointer-events: none;
-        display: flex; align-items: center; justify-content: center;
-        font-family: 'JetBrains Mono'; color: var(--primary); letter-spacing: 2px;
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--primary); font-family: 'JetBrains Mono';
     }}
+    
+    .block-container {{ padding-top: 3rem; padding-bottom: 5rem; max-width: 680px; }}
     </style>
     """
 
-st.markdown(get_css(st.session_state.is_hardcore), unsafe_allow_html=True)
+st.markdown(get_css(st.session_state.is_hardcore, st.session_state.analysis_result), unsafe_allow_html=True)
 
 # ==========================================
-# 4. LOGIC
+# 5. LOGIC HANDLERS
 # ==========================================
+def handle_analyze():
+    text = st.session_state.input_text.strip()
+    if not text: return
+    
+    st.session_state.entropy_state = 'PROCESSING'
+    
+    # [Logic] 여기서 텍스트를 분석해서 시각화 데이터를 만듭니다
+    mode = "ruthless" if st.session_state.is_hardcore else "assistant"
+    result = LogicEngine.analyze(text, mode)
+    
+    # 결과 저장 (세션에 저장되어야 리런 후에도 반영됨)
+    st.session_state.analysis_result = result
+    st.session_state.feedback = result["feedback"]
+
 def handle_reset():
     st.session_state.entropy_state = 'CHAOS'
     st.session_state.input_text = ""
     st.session_state.feedback = "SYSTEM RESET."
-
-def handle_analyze():
-    if not st.session_state.input_text.strip(): return
-    st.session_state.entropy_state = 'PROCESSING'
-
-def toggle_spectator():
-    st.session_state.is_spectator = not st.session_state.is_spectator
+    st.session_state.analysis_result = {"stage": 1, "active_nodes": [], "stars": [], "score": 0}
 
 def apply_cheat():
-    # [New] Cunning Mode Logic
+    # 컨닝 모드: 랜덤한 '있어 보이는' 문장 자동 입력
     cheats = [
-        "According to First Principles, we must deconstruct this problem into...",
-        "The entropy of this system can be reduced by applying...",
-        "If we apply Popper's falsification to this premise...",
+        "돈을 벌기 위해 매출 파이프라인을 구조화해야 한다.",
+        "사용자 경험을 위해 리액트 네이티브 코드를 최적화한다.",
+        "엔트로피 감소를 위해 불필요한 프로세스를 제거한다."
     ]
     st.session_state.input_text = random.choice(cheats)
 
 # ==========================================
-# 5. UI RENDER
+# 6. UI COMPONENTS
 # ==========================================
 
 # Header
 c1, c2 = st.columns([6, 4])
 with c1:
     color = AppConfig.COLOR_RUTHLESS if st.session_state.is_hardcore else AppConfig.COLOR_ASSISTANT
-    st.markdown(f"<div class='mono' style='font-weight:900; font-size:1.5rem;'>FEYNMANTIC<span style='color:{color}; font-size:0.6em; vertical-align:top; margin-left:4px;'>OS v13</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='mono' style='font-weight:900; font-size:1.5rem;'>FEYNMANTIC<span style='color:{color}; font-size:0.6em; margin-left:4px;'>OS v14</span></div>", unsafe_allow_html=True)
 with c2:
-    # Mode Toggles
     c2_1, c2_2 = st.columns(2)
     with c2_1:
-        spec_icon = "👁️" if st.session_state.is_spectator else "🕶️"
-        if st.button(spec_icon, help="Spectator Mode"): toggle_spectator()
+        if st.button("👁️", help="관전 모드 (Spectator)"): st.session_state.is_spectator = not st.session_state.is_spectator
     with c2_2:
         btn_text = "🔥" if st.session_state.is_hardcore else "💎"
-        if st.button(btn_text, help="Toggle Hardcore"):
+        if st.button(btn_text, help="모드 전환"):
             st.session_state.is_hardcore = not st.session_state.is_hardcore
             st.query_params["mode"] = "ruthless" if st.session_state.is_hardcore else "assistant"
             st.rerun()
 
 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-# Spectator Mode Overlay
+# Spectator Overlay
 if st.session_state.is_spectator:
     st.markdown(f"""
     <div class="spectator-overlay">
-        <div style="text-align:center;">
-            <div style="font-size:3rem; animation:pulse 1s infinite;">👁️</div>
-            <div>SPECTATOR MODE ACTIVE</div>
-            <div style="font-size:0.8rem; opacity:0.7;">Observing Neural Network...</div>
-        </div>
+        <div style="font-size:4rem; animation:pulse 2s infinite;">👁️</div>
+        <div style="margin-top:20px; letter-spacing:2px;">SPECTATOR MODE</div>
+        <div style="font-size:0.8rem; opacity:0.6; margin-top:10px;">Watching Neural Activity...</div>
+        <div style="margin-top:30px; color:white; font-size:0.8rem;">User-8291: "Quantum Mechanics..."</div>
     </div>
-    <style>@keyframes pulse {{ 0% {{opacity:0.5}} 50% {{opacity:1}} 100% {{opacity:0.5}} }}</style>
+    <style>@keyframes pulse {{ 0% {{opacity:0.3}} 50% {{opacity:1}} 100% {{opacity:0.3}} }}</style>
     """, unsafe_allow_html=True)
 
 # Status Area
@@ -194,75 +248,75 @@ status_area = st.empty()
 if st.session_state.entropy_state == 'CHAOS':
     with status_area.container():
         st.markdown(f"""<div class="hud-box"><span style="animation:blink 1s infinite">_</span> {st.session_state.feedback}</div>""", unsafe_allow_html=True)
-        # Idle Visual
-        glow = AppConfig.COLOR_RUTHLESS if st.session_state.is_hardcore else AppConfig.COLOR_ASSISTANT
-        st.markdown(f"""<div style="display:flex; justify-content:center; margin:40px 0;"><div style="width:100px; height:100px; border-radius:50%; background:radial-gradient(circle, {glow}40 0%, transparent 70%); box-shadow: 0 0 80px {glow}30;"></div></div>""", unsafe_allow_html=True)
-
 elif st.session_state.entropy_state == 'PROCESSING':
     loader = st.empty()
     color = AppConfig.COLOR_RUTHLESS if st.session_state.is_hardcore else AppConfig.COLOR_ASSISTANT
     for i in range(31):
-        loader.markdown(f"""<div style="background:rgba(0,0,0,0.8); padding:20px 40px; border-radius:50px; border:1px solid {color}50; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:9999; backdrop-filter:blur(20px);"><span style="font-family:'JetBrains Mono'; color:white;">OPTIMIZING... {int(i*3.33)}%</span></div>""", unsafe_allow_html=True)
-        time.sleep(0.03)
+        loader.markdown(f"""<div style="background:rgba(0,0,0,0.9); padding:20px 40px; border-radius:50px; border:1px solid {color}50; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:9999;"><span class='mono' style='color:white;'>ANALYZING... {int(i*3.33)}%</span></div>""", unsafe_allow_html=True)
+        time.sleep(0.02)
     st.session_state.entropy_state = 'CRYSTAL'
-    st.session_state.feedback = "CRYSTALLIZATION COMPLETE."
     st.rerun()
-
 elif st.session_state.entropy_state == 'CRYSTAL':
     with status_area.container():
-        st.markdown(f"""<div class="hud-box" style="border-color:#10b981; color:#10b981;"><span>✓</span> LOGIC VERIFIED.</div>""", unsafe_allow_html=True)
-        st.markdown(f"""<div style="display:flex; justify-content:center; margin:40px 0;"><div style="font-size:4rem; filter:drop-shadow(0 0 30px #10b98160);">💠</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="hud-box" style="border-color:#10b981; color:#10b981;"><span>✓</span> {st.session_state.feedback}</div>""", unsafe_allow_html=True)
 
-# --- TABS: The 3 World Views ---
-t1, t2, t3 = st.tabs(["🗺️ STUDENT", "🌳 PRO", "🌌 EXPLORER"])
+# --- TABS: Dynamic Visualizations ---
+t1, t2, t3 = st.tabs(["🎓 STUDENT", "💼 PRO", "🚀 EXPLORER"])
 
-# 1. Student View (Mario Map)
+# 1. Student Tab (Mario Map)
 with t1:
-    # [New] Student Level Selection
     cols = st.columns([2, 1])
-    with cols[0]:
-        st.caption("ACADEMIC JOURNEY")
-    with cols[1]:
-        lvl = st.selectbox("Level", ["Elementary", "Middle", "High", "Univ"], label_visibility="collapsed", index=3)
+    with cols[0]: st.caption("ACADEMIC ROADMAP")
+    with cols[1]: st.selectbox("Grade", ["Elementary", "Middle", "High", "Univ"], label_visibility="collapsed")
     
-    # [New] Visual Mario Map
-    active_class = "active" if st.session_state.entropy_state == 'CRYSTAL' else ""
+    # 입력 길이에 따라 node class가 바뀜 (CSS 연동)
     st.markdown(f"""
-    <div style="position:relative; height:100px; margin-top:20px; display:flex; align-items:center; justify-content:space-between; padding:0 20px;">
-        <div class="map-line" style="width:90%; top:50%; left:5%; height:2px;"></div>
-        <div class="map-node active">1</div>
-        <div class="map-node {active_class}">2</div>
-        <div class="map-node">3</div>
-        <div class="map-node">4</div>
+    <div class="map-container">
+        <div class="map-line"></div>
+        <div class="map-circle node-1">1</div>
+        <div class="map-circle node-2">2</div>
+        <div class="map-circle node-3">3</div>
     </div>
-    <div style="text-align:center; font-size:0.8em; opacity:0.6; margin-top:10px;">Current Stage: Logic Formulation ({lvl})</div>
+    <div style="text-align:center; font-size:0.8rem; opacity:0.6; margin-top:10px;">
+        Current Stage: {st.session_state.analysis_result['stage']} / 3
+    </div>
     """, unsafe_allow_html=True)
 
-# 2. Pro View (Tech Tree)
+# 2. Pro Tab (Tech Tree)
 with t2:
-    # [New] Visual Tech Tree
-    active_color = "#10b981" if st.session_state.entropy_state == 'CRYSTAL' else "rgba(255,255,255,0.2)"
+    st.caption("PROJECT DEPENDENCIES")
+    # 키워드에 따라 border class가 바뀜
     st.markdown(f"""
-    <div style="display:flex; flex-direction:column; align-items:center; gap:10px; margin-top:20px;">
-        <div style="border:1px solid {active_color}; padding:5px 15px; border-radius:4px; color:{active_color}; font-size:0.8em;">GOAL: IPO</div>
-        <div style="width:1px; height:20px; background:rgba(255,255,255,0.2);"></div>
-        <div style="display:flex; gap:20px;">
-            <div style="border:1px solid rgba(255,255,255,0.2); padding:5px 10px; border-radius:4px; font-size:0.7em;">Product</div>
-            <div style="border:1px solid rgba(255,255,255,0.2); padding:5px 10px; border-radius:4px; font-size:0.7em;">Sales</div>
+    <div style="display:flex; justify-content:center; gap:20px; margin-top:20px;">
+        <div style="padding:10px 20px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; text-align:center;" class="tree-prod">
+            <div style="font-size:1.2rem;">📦</div><div style="font-size:0.8rem;">Product</div>
+        </div>
+        <div style="padding:10px 20px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; text-align:center;" class="tree-sales">
+            <div style="font-size:1.2rem;">💰</div><div style="font-size:0.8rem;">Sales</div>
+        </div>
+        <div style="padding:10px 20px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; text-align:center;" class="tree-tech">
+            <div style="font-size:1.2rem;">💻</div><div style="font-size:0.8rem;">Tech</div>
         </div>
     </div>
+    <div style="text-align:center; margin-top:15px; font-size:0.8rem; color:#666;">
+        Tip: Try typing 'money', 'code', or 'user'
+    </div>
     """, unsafe_allow_html=True)
 
-# 3. Explorer View (Galaxy)
+# 3. Explorer Tab (Galaxy)
 with t3:
-    # [New] Visual Galaxy
+    st.caption("IDEA CONSTELLATION")
+    # 입력 길이에 따라 별(점)이 생성됨
+    stars_html = ""
+    for star in st.session_state.analysis_result['stars']:
+        stars_html += f'<div style="position:absolute; top:{star["y"]}%; left:{star["x"]}%; width:{star["size"]}px; height:{star["size"]}px; background:white; border-radius:50%; box-shadow:0 0 5px white;"></div>'
+    
     st.markdown(f"""
-    <div style="display:flex; justify-content:center; align-items:center; height:150px; perspective: 500px;">
-        <div style="width:60px; height:60px; border:1px solid var(--primary); border-radius:50%; animation: orbit 4s linear infinite; position:absolute;"></div>
-        <div style="width:100px; height:100px; border:1px solid rgba(255,255,255,0.1); border-radius:50%; animation: orbit 7s linear infinite reverse; position:absolute;"></div>
-        <div style="width:10px; height:10px; background:white; border-radius:50%; box-shadow:0 0 10px white;"></div>
+    <div style="position:relative; width:100%; height:200px; background:rgba(0,0,0,0.3); border-radius:10px; overflow:hidden; margin-top:10px;">
+        {stars_html}
+        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:50px; height:50px; border:1px solid var(--primary); border-radius:50%; animation:pulse 2s infinite;"></div>
     </div>
-    <style>@keyframes orbit {{ from{{transform:rotateX(60deg) rotateZ(0deg)}} to{{transform:rotateX(60deg) rotateZ(360deg)}} }}</style>
+    <style>@keyframes pulse {{ 0% {{box-shadow:0 0 0 0 var(--primary);}} 70% {{box-shadow:0 0 0 20px rgba(0,0,0,0);}} 100% {{box-shadow:0 0 0 0 rgba(0,0,0,0);}} }}</style>
     """, unsafe_allow_html=True)
 
 st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
@@ -273,19 +327,18 @@ with c_input:
     st.text_area(
         "Input",
         key="input_text",
-        placeholder="Initialize thought sequence...",
+        placeholder="Type your thoughts...",
         height=140,
         label_visibility="collapsed",
         disabled=st.session_state.entropy_state == 'PROCESSING'
     )
 with c_cheat:
-    # [New] Cunning Mode Button
-    st.markdown("<div style='height:5px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
     if st.button("🦊", help="Cunning Mode (Auto-Fill)"):
         apply_cheat()
         st.rerun()
 
-# Action Buttons
+# Buttons
 if st.session_state.entropy_state == 'CRYSTAL':
     if st.button("⚡ RESET SYSTEM", type="primary"):
         handle_reset()
@@ -295,7 +348,7 @@ else:
         handle_analyze()
         st.rerun()
 
-# JS Bridge
+# JS Bridge (유지)
 components.html(f"""
 <script>
     const STORAGE_KEY = '{AppConfig.STORAGE_KEY}';
@@ -306,15 +359,9 @@ components.html(f"""
 
     if(textArea && !textArea.dataset.bound) {{
         textArea.dataset.bound = "true";
-        let timeout;
         textArea.addEventListener('input', () => {{
-            clearTimeout(timeout);
-            timeout = setTimeout(() => {{
-                try {{ localStorage.setItem(STORAGE_KEY, textArea.value); }} catch(e){{}}
-            }}, 300);
+            try {{ localStorage.setItem(STORAGE_KEY, textArea.value); }} catch(e){{}}
         }});
-        
-        // Restore
         try {{
             const saved = localStorage.getItem(STORAGE_KEY);
             if(saved && textArea.value === "") {{
@@ -323,7 +370,6 @@ components.html(f"""
                 textArea.dispatchEvent(new Event('input', {{ bubbles: true }}));
             }}
         }} catch(e){{}}
-        
         const isMobile = ('ontouchstart' in window) && (window.innerWidth < 768);
         textArea.addEventListener('keydown', (e) => {{
             if(e.key === 'Enter' && !e.shiftKey && !e.isComposing) {{
